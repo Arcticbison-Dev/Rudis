@@ -1,37 +1,157 @@
-import { type User, type InsertUser } from "@shared/schema";
+import { type Invoice, type InsertInvoice, type WebhookLog, type PaymentTransaction } from "@shared/schema";
 import { randomUUID } from "crypto";
 
-// modify the interface with any CRUD methods
-// you might need
-
 export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
+  // Invoice operations
+  createInvoice(invoice: InsertInvoice): Promise<Invoice>;
+  getInvoice(id: string): Promise<Invoice | undefined>;
+  getAllInvoices(): Promise<Invoice[]>;
+  updateInvoiceStatus(id: string, status: string, paidAt?: Date): Promise<Invoice | undefined>;
+  
+  // Payment transaction operations
+  createPaymentTransaction(tx: {
+    invoiceId: string;
+    transactionId: string;
+    confirmations: number;
+    blockHeight?: number;
+  }): Promise<PaymentTransaction>;
+  getPaymentTransactionsByInvoice(invoiceId: string): Promise<PaymentTransaction[]>;
+  
+  // Webhook log operations
+  createWebhookLog(log: {
+    invoiceId: string;
+    url: string;
+    status: string;
+    statusCode?: number;
+    errorMessage?: string;
+    payload?: string;
+    responseBody?: string;
+    attempt?: number;
+  }): Promise<WebhookLog>;
+  getWebhookLogsByInvoice(invoiceId: string): Promise<WebhookLog[]>;
 }
 
 export class MemStorage implements IStorage {
-  private users: Map<string, User>;
+  private invoices: Map<string, Invoice>;
+  private webhookLogs: Map<string, WebhookLog>;
+  private paymentTransactions: Map<string, PaymentTransaction>;
 
   constructor() {
-    this.users = new Map();
+    this.invoices = new Map();
+    this.webhookLogs = new Map();
+    this.paymentTransactions = new Map();
   }
 
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+  async createInvoice(insertInvoice: InsertInvoice): Promise<Invoice> {
+    const id = randomUUID();
+    const now = new Date();
+    
+    const invoice: Invoice = {
+      id,
+      amount: insertInvoice.amount,
+      currency: insertInvoice.currency,
+      description: insertInvoice.description,
+      paymentAddress: insertInvoice.paymentAddress,
+      status: "pending",
+      createdAt: now,
+      paidAt: null,
+      expiresAt: insertInvoice.expiresAt ? new Date(insertInvoice.expiresAt) : null,
+    };
+    
+    this.invoices.set(id, invoice);
+    return invoice;
   }
 
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
+  async getInvoice(id: string): Promise<Invoice | undefined> {
+    return this.invoices.get(id);
+  }
+
+  async getAllInvoices(): Promise<Invoice[]> {
+    return Array.from(this.invoices.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
   }
 
-  async createUser(insertUser: InsertUser): Promise<User> {
+  async updateInvoiceStatus(
+    id: string,
+    status: string,
+    paidAt?: Date
+  ): Promise<Invoice | undefined> {
+    const invoice = this.invoices.get(id);
+    if (!invoice) return undefined;
+
+    const updatedInvoice: Invoice = {
+      ...invoice,
+      status,
+      paidAt: paidAt || invoice.paidAt,
+    };
+
+    this.invoices.set(id, updatedInvoice);
+    return updatedInvoice;
+  }
+
+  async createPaymentTransaction(tx: {
+    invoiceId: string;
+    transactionId: string;
+    confirmations: number;
+    blockHeight?: number;
+  }): Promise<PaymentTransaction> {
     const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+    const transaction: PaymentTransaction = {
+      id,
+      invoiceId: tx.invoiceId,
+      transactionId: tx.transactionId,
+      confirmations: tx.confirmations.toString(),
+      blockHeight: tx.blockHeight?.toString() || null,
+      confirmedAt: new Date(),
+    };
+
+    this.paymentTransactions.set(id, transaction);
+    return transaction;
+  }
+
+  async getPaymentTransactionsByInvoice(invoiceId: string): Promise<PaymentTransaction[]> {
+    return Array.from(this.paymentTransactions.values())
+      .filter((tx) => tx.invoiceId === invoiceId)
+      .sort(
+        (a, b) => new Date(b.confirmedAt).getTime() - new Date(a.confirmedAt).getTime()
+      );
+  }
+
+  async createWebhookLog(log: {
+    invoiceId: string;
+    url: string;
+    status: string;
+    statusCode?: number;
+    errorMessage?: string;
+    payload?: string;
+    responseBody?: string;
+    attempt?: number;
+  }): Promise<WebhookLog> {
+    const id = randomUUID();
+    const webhookLog: WebhookLog = {
+      id,
+      invoiceId: log.invoiceId,
+      url: log.url,
+      status: log.status,
+      statusCode: log.statusCode?.toString() || null,
+      errorMessage: log.errorMessage || null,
+      payload: log.payload || null,
+      responseBody: log.responseBody || null,
+      attempt: log.attempt?.toString() || "1",
+      createdAt: new Date(),
+    };
+
+    this.webhookLogs.set(id, webhookLog);
+    return webhookLog;
+  }
+
+  async getWebhookLogsByInvoice(invoiceId: string): Promise<WebhookLog[]> {
+    return Array.from(this.webhookLogs.values())
+      .filter((log) => log.invoiceId === invoiceId)
+      .sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
   }
 }
 
