@@ -1,8 +1,8 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertInvoiceSchema, insertTemplateSchema } from "@shared/schema";
-import { paymentConfirmationSchema } from "@shared/webhook-schema";
+import { insertInvoiceSchema, insertTemplateSchema, paymentConfirmationSchema } from "@shared/schema";
+import { paymentConfirmationSchema as legacyPaymentConfirmationSchema } from "@shared/webhook-schema";
 import axios, { AxiosError } from "axios";
 import crypto from "crypto";
 
@@ -23,6 +23,19 @@ const WEBHOOK_RETRY_DELAYS = [WEBHOOK_RETRY_DELAY_1, WEBHOOK_RETRY_DELAY_2, WEBH
 const CLEANUP_EXPIRED_DAYS = Math.max(30, Math.min(90, parseIntWithDefault(process.env.CLEANUP_EXPIRED_DAYS, 90)));
 const ALT_WEBHOOK_SECRET = process.env.ALT_WEBHOOK_SECRET || "";
 
+// Rail service configuration
+const RAIL_AUTH_TOKEN = process.env.RAIL_AUTH_TOKEN || "";
+const LN_SERVICE_URL = process.env.LN_SERVICE_URL || "http://localhost:5001";
+const BTC_SERVICE_URL = process.env.BTC_SERVICE_URL || "http://localhost:5002";
+const XMR_SERVICE_URL = process.env.XMR_SERVICE_URL || "http://localhost:5003";
+const ENABLE_LN = process.env.ENABLE_LN === "true";
+const ENABLE_BTC = process.env.ENABLE_BTC === "true";
+const ENABLE_XMR = process.env.ENABLE_XMR === "true";
+
+// Simulation configuration  
+const SIMULATION_ENABLED = process.env.SIMULATION_ENABLED === "true";
+const ADMIN_SIM_TOKEN = process.env.ADMIN_SIM_TOKEN || "";
+
 // HMAC signature generation for webhook security
 function generateWebhookSignature(payload: any): string {
   if (!ALT_WEBHOOK_SECRET) {
@@ -34,6 +47,58 @@ function generateWebhookSignature(payload: any): string {
     .createHmac("sha256", ALT_WEBHOOK_SECRET)
     .update(payloadString)
     .digest("hex");
+}
+
+// Rail authentication middleware
+function authenticateRailCallback(req: Request, res: Response, next: NextFunction) {
+  // Fail fast if RAIL_AUTH_TOKEN is not configured
+  if (!RAIL_AUTH_TOKEN || RAIL_AUTH_TOKEN.length === 0) {
+    console.error("CRITICAL: RAIL_AUTH_TOKEN not configured but rail callback endpoint called");
+    return res.status(500).json({ error: "Server configuration error" });
+  }
+  
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.warn("Rail callback rejected: missing or invalid Authorization header");
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  const token = authHeader.substring(7);
+  
+  if (!token || token.length === 0 || token !== RAIL_AUTH_TOKEN) {
+    console.warn("Rail callback rejected: invalid token");
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  next();
+}
+
+// Authenticate simulation endpoint
+function authenticateSimulation(req: Request, res: Response, next: NextFunction) {
+  if (!SIMULATION_ENABLED) {
+    return res.status(403).json({ error: "simulation_disabled" });
+  }
+  
+  // Fail fast if ADMIN_SIM_TOKEN is not configured
+  if (!ADMIN_SIM_TOKEN || ADMIN_SIM_TOKEN.length === 0) {
+    console.error("CRITICAL: SIMULATION_ENABLED=true but ADMIN_SIM_TOKEN not configured");
+    return res.status(500).json({ error: "Server configuration error" });
+  }
+  
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  const token = authHeader.substring(7);
+  
+  if (!token || token.length === 0 || token !== ADMIN_SIM_TOKEN) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  next();
 }
 
 // Queue a webhook for delivery (creates pending webhook log)
@@ -184,6 +249,34 @@ async function cleanupOldWebhooks() {
 const invoicePayloads = new Map<string, any>();
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Validate critical security configuration on startup
+  const anyRailEnabled = ENABLE_LN || ENABLE_BTC || ENABLE_XMR;
+  if (anyRailEnabled && (!RAIL_AUTH_TOKEN || RAIL_AUTH_TOKEN.length === 0)) {
+    console.error("╔═══════════════════════════════════════════════════════════╗");
+    console.error("║ FATAL: Rail services enabled but RAIL_AUTH_TOKEN not set ║");
+    console.error("║ Set RAIL_AUTH_TOKEN in environment before enabling rails ║");
+    console.error("╚═══════════════════════════════════════════════════════════╝");
+    throw new Error("RAIL_AUTH_TOKEN required when rail services are enabled");
+  }
+  
+  if (SIMULATION_ENABLED && (!ADMIN_SIM_TOKEN || ADMIN_SIM_TOKEN.length === 0)) {
+    console.error("╔═══════════════════════════════════════════════════════════╗");
+    console.error("║ FATAL: Simulation enabled but ADMIN_SIM_TOKEN not set    ║");
+    console.error("║ Set ADMIN_SIM_TOKEN or disable simulation                ║");
+    console.error("╚═══════════════════════════════════════════════════════════╝");
+    throw new Error("ADMIN_SIM_TOKEN required when SIMULATION_ENABLED=true");
+  }
+  
+  // Log configuration status
+  console.log("╔═══════════════════════════════════════════════════════════╗");
+  console.log("║         Altostratus Payments - Configuration             ║");
+  console.log("╠═══════════════════════════════════════════════════════════╣");
+  console.log(`║ Lightning:   ${ENABLE_LN ? "✓ ENABLED " : "✗ DISABLED"}                                   ║`);
+  console.log(`║ Bitcoin:     ${ENABLE_BTC ? "✓ ENABLED " : "✗ DISABLED"}                                   ║`);
+  console.log(`║ Monero:      ${ENABLE_XMR ? "✓ ENABLED " : "✗ DISABLED"}                                   ║`);
+  console.log(`║ Simulation:  ${SIMULATION_ENABLED ? "⚠  ENABLED (DEV ONLY)" : "✓ DISABLED"}                         ║`);
+  console.log("╚═══════════════════════════════════════════════════════════╝");
+  
   // Start periodic webhook processing (every 5 seconds)
   setInterval(async () => {
     await processWebhookQueue(invoicePayloads);
@@ -269,7 +362,165 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Webhook endpoint - receives payment confirmations from blockchain listeners
+  // Rail callback endpoints (authenticated with RAIL_AUTH_TOKEN)
+  app.post("/api/rails/ln/settled", authenticateRailCallback, async (req, res) => {
+    try {
+      const { invoiceId, transactionId, confirmations } = paymentConfirmationSchema.parse(req.body);
+      
+      const invoice = await storage.getInvoice(invoiceId);
+      if (!invoice) {
+        return res.status(404).json({ error: "Invoice not found" });
+      }
+
+      if (invoice.status === "paid") {
+        return res.json({ message: "Invoice already paid" });
+      }
+
+      if (invoice.status === "expired" || (invoice.expiresAt && new Date(invoice.expiresAt) <= new Date())) {
+        return res.status(400).json({ error: "Invoice has expired" });
+      }
+
+      await storage.createPaymentTransaction({
+        invoiceId,
+        transactionId,
+        confirmations,
+      });
+
+      await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
+      
+      console.log(`✓ Lightning payment settled for invoice ${invoiceId} via rail-ln`);
+      
+      const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
+      if (altWebhookUrl) {
+        const updatedInvoice = await storage.getInvoice(invoiceId);
+        const payload = {
+          invoiceId: updatedInvoice!.id,
+          amount: updatedInvoice!.amount,
+          currency: updatedInvoice!.currency,
+          status: "paid",
+          paidAt: updatedInvoice!.paidAt,
+          transactionId,
+          confirmations,
+        };
+        
+        invoicePayloads.set(invoiceId, payload);
+        await queueWebhook(invoiceId, altWebhookUrl, payload);
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error processing Lightning settlement:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/rails/btc/confirmed", authenticateRailCallback, async (req, res) => {
+    try {
+      const { invoiceId, transactionId, confirmations, blockHeight } = paymentConfirmationSchema.parse(req.body);
+      
+      const invoice = await storage.getInvoice(invoiceId);
+      if (!invoice) {
+        return res.status(404).json({ error: "Invoice not found" });
+      }
+
+      if (invoice.status === "paid") {
+        return res.json({ message: "Invoice already paid" });
+      }
+
+      if (invoice.status === "expired" || (invoice.expiresAt && new Date(invoice.expiresAt) <= new Date())) {
+        return res.status(400).json({ error: "Invoice has expired" });
+      }
+
+      await storage.createPaymentTransaction({
+        invoiceId,
+        transactionId,
+        confirmations,
+        blockHeight,
+      });
+
+      await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
+      
+      console.log(`✓ Bitcoin payment confirmed for invoice ${invoiceId} via rail-btc`);
+      
+      const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
+      if (altWebhookUrl) {
+        const updatedInvoice = await storage.getInvoice(invoiceId);
+        const payload = {
+          invoiceId: updatedInvoice!.id,
+          amount: updatedInvoice!.amount,
+          currency: updatedInvoice!.currency,
+          status: "paid",
+          paidAt: updatedInvoice!.paidAt,
+          transactionId,
+          confirmations,
+          blockHeight,
+        };
+        
+        invoicePayloads.set(invoiceId, payload);
+        await queueWebhook(invoiceId, altWebhookUrl, payload);
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error processing Bitcoin confirmation:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/rails/xmr/confirmed", authenticateRailCallback, async (req, res) => {
+    try {
+      const { invoiceId, transactionId, confirmations, blockHeight } = paymentConfirmationSchema.parse(req.body);
+      
+      const invoice = await storage.getInvoice(invoiceId);
+      if (!invoice) {
+        return res.status(404).json({ error: "Invoice not found" });
+      }
+
+      if (invoice.status === "paid") {
+        return res.json({ message: "Invoice already paid" });
+      }
+
+      if (invoice.status === "expired" || (invoice.expiresAt && new Date(invoice.expiresAt) <= new Date())) {
+        return res.status(400).json({ error: "Invoice has expired" });
+      }
+
+      await storage.createPaymentTransaction({
+        invoiceId,
+        transactionId,
+        confirmations,
+        blockHeight,
+      });
+
+      await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
+      
+      console.log(`✓ Monero payment confirmed for invoice ${invoiceId} via rail-xmr`);
+      
+      const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
+      if (altWebhookUrl) {
+        const updatedInvoice = await storage.getInvoice(invoiceId);
+        const payload = {
+          invoiceId: updatedInvoice!.id,
+          amount: updatedInvoice!.amount,
+          currency: updatedInvoice!.currency,
+          status: "paid",
+          paidAt: updatedInvoice!.paidAt,
+          transactionId,
+          confirmations,
+          blockHeight,
+        };
+        
+        invoicePayloads.set(invoiceId, payload);
+        await queueWebhook(invoiceId, altWebhookUrl, payload);
+      }
+
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error processing Monero confirmation:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Webhook endpoint - receives payment confirmations from blockchain listeners (legacy/direct)
   app.post("/api/webhooks/payment-confirmed", async (req, res) => {
     try {
       // Validate incoming webhook payload with strict schema
@@ -503,7 +754,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const validatedData = insertTemplateSchema.parse(req.body);
       const template = await storage.createTemplate(validatedData);
-      console.log(`✓ Template created: ${template.id} - ${template.name}`);
+      console.log(`✓ Template created: ${template.id} - ${template.planName}`);
       res.status(201).json(template);
     } catch (error: any) {
       if (error.name === "ZodError") {
@@ -555,7 +806,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Simulate payment confirmation (for testing only - remove in production)
-  app.post("/api/invoices/:id/simulate-payment", async (req, res) => {
+  app.post("/api/invoices/:id/simulate-payment", authenticateSimulation, async (req, res) => {
     try {
       const invoice = await storage.getInvoice(req.params.id);
       if (!invoice) {
@@ -563,7 +814,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       if (invoice.status === "paid") {
+        // Block simulation if already paid by a real rail
+        if (invoice.paymentSource && invoice.paymentSource !== "simulate") {
+          return res.status(400).json({ 
+            error: "Invoice already paid via real rail",
+            message: "Cannot simulate payment on invoice paid by real blockchain listener"
+          });
+        }
         return res.json({ message: "Invoice already paid" });
+      }
+
+      if (invoice.status === "expired") {
+        return res.status(400).json({ error: "Invoice has expired" });
       }
 
       // Simulate receiving a properly validated webhook from blockchain listener
@@ -574,7 +836,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         blockHeight: Math.floor(Math.random() * 1000000),
       };
 
-      console.log(`Simulating payment for invoice ${invoice.id}...`);
+      console.log(`⚠️  SIMULATION: Simulating payment for invoice ${invoice.id}...`);
 
       // Call our own webhook endpoint
       const response = await axios.post(

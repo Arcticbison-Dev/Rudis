@@ -109,6 +109,11 @@ export class MemStorage implements IStorage {
       createdAt: now,
       paidAt: null,
       expiresAt: insertInvoice.expiresAt ? new Date(insertInvoice.expiresAt) : null,
+      railType: (insertInvoice as any).railType || null,
+      bolt11Invoice: (insertInvoice as any).bolt11Invoice || null,
+      derivedAddress: (insertInvoice as any).derivedAddress || null,
+      subaddress: (insertInvoice as any).subaddress || null,
+      paymentSource: (insertInvoice as any).paymentSource || null,
     };
     
     this.invoices.set(id, invoice);

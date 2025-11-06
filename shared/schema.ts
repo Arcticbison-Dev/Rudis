@@ -13,6 +13,11 @@ export const invoices = pgTable("invoices", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   paidAt: timestamp("paid_at"),
   expiresAt: timestamp("expires_at"),
+  railType: varchar("rail_type", { length: 20 }),
+  bolt11Invoice: text("bolt11_invoice"),
+  derivedAddress: text("derived_address"),
+  subaddress: text("subaddress"),
+  paymentSource: varchar("payment_source", { length: 20 }),
 });
 
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({
@@ -77,3 +82,10 @@ export const insertTemplateSchema = createInsertSchema(templates).omit({
 
 export type InsertTemplate = z.infer<typeof insertTemplateSchema>;
 export type Template = typeof templates.$inferSelect;
+
+export const paymentConfirmationSchema = z.object({
+  invoiceId: z.string().uuid(),
+  transactionId: z.string().min(1),
+  confirmations: z.number().int().nonnegative(),
+  blockHeight: z.number().int().positive().optional(),
+});
