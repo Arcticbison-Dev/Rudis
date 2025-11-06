@@ -23,6 +23,10 @@ MVP implementation with enhanced features:
 - Beautiful, responsive UI following design guidelines with dark mode support
 
 ## Recent Changes
+- 2025-11-06: Security and operational improvements
+  - **Configurable Timeouts**: All timeouts via environment variables (webhook, retry, expiration warning, cleanup retention) with NaN guards
+  - **Expired Invoice Protection**: Payment webhook rejects expired invoices with 400 error - prevents invoice ID re-use
+  - **Cleanup Job**: POST /api/invoices/cleanup endpoint purges expired invoices older than 30-90 days (configurable) with cascade delete
 - 2025-11-06: Completed four major feature enhancements
   - **Invoice Expiration**: Automatic expiration checking via POST /api/invoices/check-expired, UI warnings for expired/expiring invoices
   - **Webhook Retry Display**: Full webhook attempt history on invoice detail page with status codes, error messages, response bodies
@@ -133,6 +137,8 @@ MVP implementation with enhanced features:
 - Clean, developer-friendly interface inspired by Linear and Stripe
 - Fast, responsive interactions with real-time updates
 - Support for Bitcoin, Lightning Network, and Monero
+- Configurable timeouts and retention policies via environment variables
+- Security: Prevent re-use of expired invoice IDs
 
 ## Design Guidelines
 Following `design_guidelines.md`:
@@ -158,11 +164,22 @@ All features implemented and architect-reviewed:
 - Error handling and loading states
 - Dark mode support throughout
 
+## Configuration
+All timeouts and thresholds are configurable via environment variables (see `.env.example`):
+- `WEBHOOK_TIMEOUT_MS`: Webhook request timeout (default: 10000ms)
+- `WEBHOOK_RETRY_ATTEMPTS`: Retry attempts for failed webhooks (default: 3)
+- `WEBHOOK_RETRY_DELAY_1/2/3`: Exponential backoff delays (default: 1000, 3000, 9000ms)
+- `VITE_EXPIRING_SOON_HOURS`: Hours before expiration to show warning (default: 1)
+- `CLEANUP_EXPIRED_DAYS`: Days to retain expired invoices (30-90 range, default: 90)
+- `ALTOSTRATUS_WEBHOOK_URL`: URL to send payment notifications to main app
+
+## Scheduled Maintenance
+The system requires two periodic jobs (see API docs for cron examples):
+1. **Expiration Check**: Run hourly to expire pending invoices (POST /api/invoices/check-expired)
+2. **Cleanup Job**: Run daily to purge old expired invoices (POST /api/invoices/cleanup)
+
 ## Future Enhancements
 - Real Lightning Network listener integration
 - Bitcoin on-chain listener with configurable confirmations
 - Monero blockchain listener
-- Invoice expiration handling
-- Webhook retry logic with exponential backoff
-- Payment history with transaction IDs
-- Blockchain explorer links
+- Blockchain explorer links for transactions
