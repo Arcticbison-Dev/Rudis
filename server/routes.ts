@@ -122,6 +122,29 @@ function authenticateSimulation(req: Request, res: Response, next: NextFunction)
   next();
 }
 
+// Authenticate admin operations (privacy, etc.) - works in production independent of simulation
+function authenticateAdmin(req: Request, res: Response, next: NextFunction) {
+  // Fail fast if ADMIN_SIM_TOKEN is not configured
+  if (!ADMIN_SIM_TOKEN || ADMIN_SIM_TOKEN.length === 0) {
+    console.error("CRITICAL: ADMIN_SIM_TOKEN not configured for admin operations");
+    return res.status(500).json({ error: "Server configuration error" });
+  }
+  
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  const token = authHeader.substring(7);
+  
+  if (!token || token.length === 0 || token !== ADMIN_SIM_TOKEN) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  next();
+}
+
 // Queue a webhook for delivery (creates pending webhook log)
 async function queueWebhook(
   invoiceId: string,
@@ -295,20 +318,29 @@ async function performDataRetentionCleanup() {
       }
       // Anonymize paid invoices older than RETENTION_PAID_DAYS
       else if (invoice.status === "paid" && invoiceAge > RETENTION_PAID_DAYS) {
-        // Hash description and payment address for privacy
-        const anonymized = await storage.updateInvoice(invoice.id, {
-          description: `[Anonymized ${Math.floor(invoiceAge)} days old]`,
-          paymentAddress: crypto.createHash('sha256').update(invoice.paymentAddress).digest('hex').substring(0, 16),
-        });
-        
-        if (anonymized) {
-          console.log(JSON.stringify({
-            action: "data_retention",
-            invoiceId: invoice.id,
-            age_days: Math.floor(invoiceAge),
-            decision: "anonymized",
-          }));
-          results.anonymized++;
+        // Check if already anonymized (description starts with [Anonymized])
+        if (!invoice.description.startsWith("[Anonymized")) {
+          // Use salted hash for payment address anonymization
+          const salt = crypto.randomBytes(16).toString('hex');
+          const hashedAddress = crypto.createHash('sha256')
+            .update(invoice.paymentAddress + salt)
+            .digest('hex')
+            .substring(0, 16);
+          
+          const anonymized = await storage.updateInvoice(invoice.id, {
+            description: `[Anonymized ${Math.floor(invoiceAge)} days old]`,
+            paymentAddress: hashedAddress,
+          });
+          
+          if (anonymized) {
+            console.log(JSON.stringify({
+              action: "data_retention",
+              invoiceId: invoice.id,
+              age_days: Math.floor(invoiceAge),
+              decision: "anonymized",
+            }));
+            results.anonymized++;
+          }
         }
       }
     }
@@ -985,6 +1017,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Error simulating payment:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Privacy endpoint: Manual invoice anonymization (GDPR compliance)
+  // Requires admin authentication to prevent unauthorized data manipulation
+  // Uses authenticateAdmin (not authenticateSimulation) so it works in production
+  app.post("/api/privacy/anonymize/:id", authenticateAdmin, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const invoice = await storage.getInvoice(id);
+      
+      if (!invoice) {
+        return res.status(404).json({ error: "Invoice not found" });
+      }
+
+      // Only allow anonymization of paid or expired invoices (protect active pending invoices)
+      if (invoice.status !== "paid" && invoice.status !== "expired") {
+        return res.status(400).json({
+          error: "Invalid invoice status",
+          message: "Only paid or expired invoices can be anonymized"
+        });
+      }
+
+      // Check if already anonymized
+      if (invoice.description.startsWith("[Anonymized")) {
+        return res.json({
+          success: true,
+          message: "Invoice already anonymized",
+          invoice,
+        });
+      }
+
+      // Use salted hash for payment address anonymization
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hashedAddress = crypto.createHash('sha256')
+        .update(invoice.paymentAddress + salt)
+        .digest('hex')
+        .substring(0, 16);
+      
+      const invoiceAge = Math.floor((Date.now() - new Date(invoice.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+      
+      const anonymized = await storage.updateInvoice(id, {
+        description: `[Anonymized at user request - ${invoiceAge} days old]`,
+        paymentAddress: hashedAddress,
+      });
+
+      console.log(JSON.stringify({
+        action: "privacy_request",
+        invoiceId: id,
+        age_days: invoiceAge,
+        decision: "anonymized",
+        trigger: "manual",
+      }));
+
+      res.json({
+        success: true,
+        message: "Invoice anonymized successfully",
+        invoice: anonymized,
+      });
+    } catch (error: any) {
+      console.error("Error anonymizing invoice:", error);
       res.status(500).json({ error: error.message });
     }
   });

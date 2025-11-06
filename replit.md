@@ -38,6 +38,34 @@ Altostratus Payments consists of a React frontend and an Express.js backend, com
 - **API Endpoints:** Comprehensive REST API for invoices, templates, webhook callbacks, and development-only payment simulation.
 - **Configuration:** Extensive use of environment variables for timeouts, retry attempts, feature flags (ENABLE_LN, ENABLE_BTC, ENABLE_XMR), service URLs, and security tokens.
 
+## Production Readiness (Completed 2025-11-06)
+
+All 10 production readiness phases completed:
+
+1. **Feature Flags & Simulation**: ENABLE_LN, ENABLE_BTC, ENABLE_XMR flags with startup validation; SIMULATION_ENABLED (default: disabled); simulation source tracking
+2. **Rail Callback Security**: Bearer token auth, idempotency checks, minimal structured logging, rejection of expired/paid invoices
+3. **Webhook Hardening**: HMAC signing with ALT_WEBHOOK_SECRET, exponential backoff retry (3 attempts), persistent queue, configurable retry delays
+4. **E2E Testing Guide**: Comprehensive docs/E2E_TESTING_GUIDE.md covering all 3 rails, edge cases (underpayment, overpayment, reorgs, late payments)
+5. **UX Polish**: Privacy-first UI (no PII, QR-only), status badges, client-side explorer links, transaction history
+6. **Observability**: docs/OBSERVABILITY.md with structured logging, metrics, alerts, SLA targets (LN <5s, BTC <30min, XMR <25min)
+7. **Ops & Key Management**: docs/OPS_KEY_MANAGEMENT.md covering key storage (hardware wallets, view-only access), backup strategies, rotation procedures, disaster recovery
+8. **Abuse Prevention**: Rate limiting (10/min invoices, 3/min simulation), feature flag validation, RAIL_AUTH_TOKEN enforcement
+9. **Data Retention & Privacy**: Auto-anonymization (90-day paid invoices, salted hash), configurable retention (RETENTION_PAID_DAYS, RETENTION_MAX_DAYS), manual anonymization endpoint (POST /api/privacy/anonymize/:id)
+10. **Policy Documentation**: docs/CRYPTO_PAYMENT_POLICY.md (payment handling, refunds, reorgs, security), docs/STATUS_SEMANTICS.md (status definitions, flow diagrams, edge cases)
+
+**Security Enhancements:**
+- Salted hashing for invoice anonymization (crypto.randomBytes salt + SHA256)
+- Structured privacy-minimal logging (invoiceId, rail, event only)
+- HMAC webhook signing for Altostratus integration
+- Manual privacy endpoint for GDPR compliance
+- Automatic cleanup jobs (webhooks: hourly, retention: daily)
+
+**Configuration:**
+- All feature flags default to secure state (all disabled)
+- Configurable timeouts and retention via environment variables
+- Separate tokens for rail auth (RAIL_AUTH_TOKEN) and admin (ADMIN_SIM_TOKEN)
+- Webhook secret rotation support (ALT_WEBHOOK_SECRET)
+
 ## External Dependencies
 - **QRCode.react:** For generating QR codes.
 - **mempool.space:** Blockchain explorer for Bitcoin transactions.
@@ -46,3 +74,10 @@ Altostratus Payments consists of a React frontend and an Express.js backend, com
     - `rail-ln/`: Lightning Network listener.
     - `rail-btc/`: Bitcoin on-chain listener.
     - `rail-xmr/`: Monero listener.
+
+## Documentation Suite
+- `docs/E2E_TESTING_GUIDE.md`: End-to-end testing procedures for all rails
+- `docs/OBSERVABILITY.md`: Monitoring, logging, metrics, and alerting
+- `docs/OPS_KEY_MANAGEMENT.md`: Key storage, backups, rotation, disaster recovery
+- `docs/CRYPTO_PAYMENT_POLICY.md`: Payment handling policies and compliance
+- `docs/STATUS_SEMANTICS.md`: Invoice status definitions and transitions
