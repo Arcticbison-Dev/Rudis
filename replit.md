@@ -23,6 +23,11 @@ MVP implementation with enhanced features:
 - Beautiful, responsive UI following design guidelines with dark mode support
 
 ## Recent Changes
+- 2025-11-06: Webhook reliability and security enhancements
+  - **HMAC Signing**: All webhooks signed with X-Altostratus-Signature header using ALT_WEBHOOK_SECRET (HMAC-SHA256)
+  - **Persistent Queue**: Webhooks survive server restarts, continue from where they left off, process every 5 seconds
+  - **Minimal Logging**: Only stores attempt counter, timestamps, status, error message - no payload/responseBody for privacy
+  - **Auto-Cleanup**: Failed webhooks deleted after 10 attempts or 24 hours (configurable), runs automatically every hour
 - 2025-11-06: Security and operational improvements
   - **Configurable Timeouts**: All timeouts via environment variables (webhook, retry, expiration warning, cleanup retention) with NaN guards
   - **Expired Invoice Protection**: Payment webhook rejects expired invoices with 400 error - prevents invoice ID re-use
@@ -106,12 +111,13 @@ MVP implementation with enhanced features:
 - `id`: UUID
 - `invoiceId`: Reference to invoice
 - `url`: Webhook destination URL
-- `status`: success | failed
+- `status`: pending | success | failed
 - `statusCode`: HTTP status code (nullable)
 - `errorMessage`: Error details (nullable)
-- `responseBody`: Webhook response (nullable)
 - `attempt`: Attempt number
+- `retryAfter`: Next retry timestamp (nullable)
 - `createdAt`: Timestamp
+- `lastAttemptAt`: Last delivery attempt timestamp (nullable)
 
 **PaymentTransaction Model:**
 - `id`: UUID

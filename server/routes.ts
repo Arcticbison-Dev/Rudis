@@ -4,6 +4,7 @@ import { storage } from "./storage";
 import { insertInvoiceSchema, insertTemplateSchema } from "@shared/schema";
 import { paymentConfirmationSchema } from "@shared/webhook-schema";
 import axios, { AxiosError } from "axios";
+import crypto from "crypto";
 
 // Configuration from environment variables with sensible defaults and validation
 const parseIntWithDefault = (value: string | undefined, defaultValue: number): number => {
@@ -13,84 +14,214 @@ const parseIntWithDefault = (value: string | undefined, defaultValue: number): n
 };
 
 const WEBHOOK_TIMEOUT_MS = parseIntWithDefault(process.env.WEBHOOK_TIMEOUT_MS, 10000);
-const WEBHOOK_RETRY_ATTEMPTS = parseIntWithDefault(process.env.WEBHOOK_RETRY_ATTEMPTS, 3);
+const WEBHOOK_MAX_ATTEMPTS = parseIntWithDefault(process.env.WEBHOOK_MAX_ATTEMPTS, 10);
+const WEBHOOK_MAX_AGE_HOURS = parseIntWithDefault(process.env.WEBHOOK_MAX_AGE_HOURS, 24);
 const WEBHOOK_RETRY_DELAY_1 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_1, 1000);
 const WEBHOOK_RETRY_DELAY_2 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_2, 3000);
 const WEBHOOK_RETRY_DELAY_3 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_3, 9000);
 const WEBHOOK_RETRY_DELAYS = [WEBHOOK_RETRY_DELAY_1, WEBHOOK_RETRY_DELAY_2, WEBHOOK_RETRY_DELAY_3];
 const CLEANUP_EXPIRED_DAYS = Math.max(30, Math.min(90, parseIntWithDefault(process.env.CLEANUP_EXPIRED_DAYS, 90)));
+const ALT_WEBHOOK_SECRET = process.env.ALT_WEBHOOK_SECRET || "";
 
-async function sendWebhookWithRetry(
+// HMAC signature generation for webhook security
+function generateWebhookSignature(payload: any): string {
+  if (!ALT_WEBHOOK_SECRET) {
+    console.warn("ALT_WEBHOOK_SECRET not configured - webhooks will not be signed");
+    return "";
+  }
+  const payloadString = JSON.stringify(payload);
+  return crypto
+    .createHmac("sha256", ALT_WEBHOOK_SECRET)
+    .update(payloadString)
+    .digest("hex");
+}
+
+// Queue a webhook for delivery (creates pending webhook log)
+async function queueWebhook(
+  invoiceId: string,
+  url: string,
+  payload: any
+): Promise<string> {
+  const webhookLog = await storage.createWebhookLog({
+    invoiceId,
+    url,
+    status: "pending",
+    attempt: 1,
+    retryAfter: new Date(), // Immediate first attempt
+  });
+  
+  console.log(`Webhook queued for invoice ${invoiceId}, will attempt delivery immediately`);
+  return webhookLog.id;
+}
+
+// Attempt to deliver a single webhook
+async function attemptWebhookDelivery(
+  webhookLogId: string,
+  invoiceId: string,
   url: string,
   payload: any,
-  invoiceId: string,
-  attempt: number = 1
-): Promise<{ success: boolean; statusCode?: number; error?: string; responseBody?: string }> {
+  currentAttempt: number
+): Promise<boolean> {
   try {
+    // Generate HMAC signature for this delivery attempt
+    const signature = generateWebhookSignature(payload);
+    
     const response = await axios.post(url, payload, {
       timeout: WEBHOOK_TIMEOUT_MS,
       headers: {
         "Content-Type": "application/json",
         "User-Agent": "Altostratus-Payments/1.0",
+        ...(signature && { "X-Altostratus-Signature": signature }),
       },
       validateStatus: (status) => status < 500, // Don't throw on 4xx
     });
 
     const success = response.status >= 200 && response.status < 300;
 
-    await storage.createWebhookLog({
-      invoiceId,
-      url,
-      status: success ? "success" : "failed",
-      statusCode: response.status,
-      payload: JSON.stringify(payload),
-      responseBody: JSON.stringify(response.data),
-      attempt,
-    });
+    if (success) {
+      // Mark as successful - no retry needed
+      await storage.updateWebhookLog(webhookLogId, {
+        status: "success",
+        statusCode: response.status,
+        attempt: currentAttempt,
+        lastAttemptAt: new Date(),
+        retryAfter: null,
+      });
+      console.log(`✓ Webhook delivered successfully to ${url} (attempt ${currentAttempt})`);
+      return true;
+    } else {
+      // Failed but might retry - INCREMENT attempt counter for next retry
+      const nextAttempt = currentAttempt + 1;
+      const shouldRetry = nextAttempt <= WEBHOOK_MAX_ATTEMPTS;
+      const nextRetryDelay = WEBHOOK_RETRY_DELAYS[Math.min(currentAttempt - 1, WEBHOOK_RETRY_DELAYS.length - 1)];
+      const retryAfter = shouldRetry ? new Date(Date.now() + nextRetryDelay) : null;
 
-    if (!success && attempt < WEBHOOK_RETRY_ATTEMPTS) {
-      const delay = WEBHOOK_RETRY_DELAYS[attempt - 1] || 9000;
-      console.log(`Webhook attempt ${attempt} failed with status ${response.status}, retrying in ${delay}ms...`);
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      return sendWebhookWithRetry(url, payload, invoiceId, attempt + 1);
+      await storage.updateWebhookLog(webhookLogId, {
+        status: shouldRetry ? "pending" : "failed",
+        statusCode: response.status,
+        errorMessage: `HTTP ${response.status}`,
+        attempt: nextAttempt,
+        lastAttemptAt: new Date(),
+        retryAfter,
+      });
+
+      if (shouldRetry) {
+        console.log(`Webhook attempt ${currentAttempt} failed with status ${response.status}, will retry as attempt ${nextAttempt} after ${nextRetryDelay}ms`);
+      } else {
+        console.error(`✗ Webhook failed permanently after ${currentAttempt} attempts (max: ${WEBHOOK_MAX_ATTEMPTS})`);
+      }
+      return false;
     }
-
-    return {
-      success,
-      statusCode: response.status,
-      responseBody: JSON.stringify(response.data),
-    };
   } catch (error: any) {
     const axiosError = error as AxiosError;
     const errorMessage = axiosError.message || "Unknown error";
     const statusCode = axiosError.response?.status;
+    
+    // Failed with exception - INCREMENT attempt counter for next retry
+    const nextAttempt = currentAttempt + 1;
+    const shouldRetry = nextAttempt <= WEBHOOK_MAX_ATTEMPTS;
+    const nextRetryDelay = WEBHOOK_RETRY_DELAYS[Math.min(currentAttempt - 1, WEBHOOK_RETRY_DELAYS.length - 1)];
+    const retryAfter = shouldRetry ? new Date(Date.now() + nextRetryDelay) : null;
 
-    await storage.createWebhookLog({
-      invoiceId,
-      url,
-      status: "failed",
+    await storage.updateWebhookLog(webhookLogId, {
+      status: shouldRetry ? "pending" : "failed",
       statusCode,
       errorMessage,
-      payload: JSON.stringify(payload),
-      attempt,
+      attempt: nextAttempt,
+      lastAttemptAt: new Date(),
+      retryAfter,
     });
 
-    if (attempt < WEBHOOK_RETRY_ATTEMPTS) {
-      const delay = WEBHOOK_RETRY_DELAYS[attempt - 1] || 9000;
-      console.log(`Webhook attempt ${attempt} failed: ${errorMessage}, retrying in ${delay}ms...`);
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      return sendWebhookWithRetry(url, payload, invoiceId, attempt + 1);
+    if (shouldRetry) {
+      console.log(`Webhook attempt ${currentAttempt} failed: ${errorMessage}, will retry as attempt ${nextAttempt} after ${nextRetryDelay}ms`);
+    } else {
+      console.error(`✗ Webhook failed permanently after ${currentAttempt} attempts (max: ${WEBHOOK_MAX_ATTEMPTS}): ${errorMessage}`);
     }
-
-    return {
-      success: false,
-      statusCode,
-      error: errorMessage,
-    };
+    return false;
   }
 }
 
+// Process all pending webhooks in the queue
+async function processWebhookQueue(invoicePayloads: Map<string, any>) {
+  const pendingWebhooks = await storage.getPendingWebhooks();
+  const now = new Date();
+
+  for (const webhook of pendingWebhooks) {
+    // Check if it's time to retry
+    if (webhook.retryAfter && new Date(webhook.retryAfter) > now) {
+      continue; // Not yet time to retry
+    }
+
+    // Get the payload for this invoice
+    const payload = invoicePayloads.get(webhook.invoiceId);
+    if (!payload) {
+      console.warn(`No payload found for webhook ${webhook.id}, skipping`);
+      continue;
+    }
+
+    const attempt = parseInt(webhook.attempt || "1", 10);
+    await attemptWebhookDelivery(
+      webhook.id,
+      webhook.invoiceId,
+      webhook.url,
+      payload,
+      attempt
+    );
+  }
+}
+
+// Clean up old failed webhooks (called periodically)
+async function cleanupOldWebhooks() {
+  const cutoffDate = new Date(Date.now() - WEBHOOK_MAX_AGE_HOURS * 60 * 60 * 1000);
+  const deletedCount = await storage.deleteOldFailedWebhooks(cutoffDate, WEBHOOK_MAX_ATTEMPTS);
+  if (deletedCount > 0) {
+    console.log(`Cleaned up ${deletedCount} old failed webhook(s)`);
+  }
+  return deletedCount;
+}
+
+// In-memory store for invoice payloads (needed for webhook retries after server restart)
+const invoicePayloads = new Map<string, any>();
+
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Start periodic webhook processing (every 5 seconds)
+  setInterval(async () => {
+    await processWebhookQueue(invoicePayloads);
+  }, 5000);
+
+  // Periodic cleanup of old failed webhooks (every hour)
+  setInterval(async () => {
+    await cleanupOldWebhooks();
+  }, 60 * 60 * 1000);
+
+  // Process any pending webhooks from previous server session on startup
+  console.log("Processing any pending webhooks from previous session...");
+  setTimeout(async () => {
+    // Reconstruct payloads for pending webhooks by fetching invoices
+    const pendingWebhooks = await storage.getPendingWebhooks();
+    for (const webhook of pendingWebhooks) {
+      const invoice = await storage.getInvoice(webhook.invoiceId);
+      if (invoice) {
+        // Reconstruct the webhook payload
+        const transactions = await storage.getPaymentTransactionsByInvoice(webhook.invoiceId);
+        const latestTx = transactions[0];
+        if (latestTx) {
+          invoicePayloads.set(webhook.invoiceId, {
+            invoiceId: invoice.id,
+            amount: invoice.amount,
+            currency: invoice.currency,
+            status: invoice.status,
+            paidAt: invoice.paidAt,
+            transactionId: latestTx.transactionId,
+            confirmations: parseInt(latestTx.confirmations, 10),
+            blockHeight: latestTx.blockHeight ? parseInt(latestTx.blockHeight, 10) : undefined,
+          });
+        }
+      }
+    }
+    await processWebhookQueue(invoicePayloads);
+  }, 1000);
+
   // Get all invoices
   app.get("/api/invoices", async (req, res) => {
     try {
@@ -193,7 +324,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(`✓ Invoice ${invoiceId} marked as paid (tx: ${transactionId}, confirmations: ${confirmations})`);
 
-      // Send webhook to main Altostratus app if configured
+      // Queue webhook to main Altostratus app if configured
       const altostratusWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       
       if (altostratusWebhookUrl && updatedInvoice) {
@@ -208,18 +339,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
           blockHeight,
         };
 
-        console.log(`Sending webhook to Altostratus app: ${altostratusWebhookUrl}`);
-        
-        const result = await sendWebhookWithRetry(
-          altostratusWebhookUrl,
-          webhookPayload,
-          invoiceId
-        );
+        // Store payload for persistent retries
+        invoicePayloads.set(invoiceId, webhookPayload);
 
-        if (result.success) {
-          console.log(`✓ Webhook delivered successfully to Altostratus app for invoice ${invoiceId}`);
-        } else {
-          console.error(`✗ Failed to deliver webhook after ${WEBHOOK_RETRY_ATTEMPTS} attempts: ${result.error || `Status ${result.statusCode}`}`);
+        // Queue the webhook for delivery (will be processed by periodic worker)
+        await queueWebhook(invoiceId, altostratusWebhookUrl, webhookPayload);
+        
+        // Attempt immediate delivery (don't wait for periodic processing)
+        const webhooks = await storage.getPendingWebhooks();
+        const thisWebhook = webhooks.find(w => w.invoiceId === invoiceId);
+        if (thisWebhook) {
+          const attempt = parseInt(thisWebhook.attempt || "1", 10);
+          await attemptWebhookDelivery(
+            thisWebhook.id,
+            invoiceId,
+            altostratusWebhookUrl,
+            webhookPayload,
+            attempt
+          );
         }
       } else if (!altostratusWebhookUrl) {
         console.log(`No ALTOSTRATUS_WEBHOOK_URL configured, skipping outbound webhook`);
@@ -303,6 +440,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Error purging expired invoices:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Process pending webhooks manually (can be called by external scheduler)
+  app.post("/api/webhooks/process-queue", async (req, res) => {
+    try {
+      await processWebhookQueue(invoicePayloads);
+      const pendingCount = (await storage.getPendingWebhooks()).length;
+      res.json({
+        success: true,
+        pendingCount,
+        message: `Webhook queue processed, ${pendingCount} still pending`,
+      });
+    } catch (error: any) {
+      console.error("Error processing webhook queue:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Cleanup old failed webhooks manually (can be called by external scheduler)
+  app.post("/api/webhooks/cleanup", async (req, res) => {
+    try {
+      const deletedCount = await cleanupOldWebhooks();
+      res.json({
+        success: true,
+        deletedCount,
+        message: `${deletedCount} old failed webhook(s) cleaned up`,
+      });
+    } catch (error: any) {
+      console.error("Error cleaning up webhooks:", error);
       res.status(500).json({ error: error.message });
     }
   });

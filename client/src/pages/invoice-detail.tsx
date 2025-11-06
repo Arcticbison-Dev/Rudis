@@ -369,6 +369,11 @@ export default function InvoiceDetail() {
                             <CheckCircle2 className="w-3 h-3 mr-1" />
                             Success
                           </Badge>
+                        ) : log.status === "pending" ? (
+                          <Badge className="bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800">
+                            <Clock className="w-3 h-3 mr-1" />
+                            Pending
+                          </Badge>
                         ) : (
                           <Badge className="bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800">
                             <AlertCircle className="w-3 h-3 mr-1" />
@@ -392,8 +397,15 @@ export default function InvoiceDetail() {
                       </div>
                     </div>
                     <div className="text-xs text-muted-foreground text-right">
-                      <div>{format(new Date(log.createdAt), "PPp")}</div>
-                      <div>{formatDistanceToNow(new Date(log.createdAt), { addSuffix: true })}</div>
+                      <div>Queued: {format(new Date(log.createdAt), "PPp")}</div>
+                      {log.lastAttemptAt && (
+                        <div>Last attempt: {formatDistanceToNow(new Date(log.lastAttemptAt), { addSuffix: true })}</div>
+                      )}
+                      {log.retryAfter && log.status === "pending" && (
+                        <div className="text-amber-600 dark:text-amber-400">
+                          Next retry: {formatDistanceToNow(new Date(log.retryAfter), { addSuffix: true })}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -408,15 +420,12 @@ export default function InvoiceDetail() {
                     </div>
                   )}
 
-                  {log.responseBody && log.status === "success" && (
-                    <details className="text-xs">
-                      <summary className="cursor-pointer font-medium text-muted-foreground hover-elevate active-elevate-2 rounded px-2 py-1 inline-block">
-                        View Response
-                      </summary>
-                      <pre className="mt-2 bg-muted p-3 rounded-md overflow-x-auto text-xs font-mono">
-                        {JSON.stringify(JSON.parse(log.responseBody), null, 2)}
-                      </pre>
-                    </details>
+                  {log.status === "pending" && (
+                    <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md p-3">
+                      <p className="text-xs text-amber-900 dark:text-amber-100">
+                        Delivery pending - will retry automatically
+                      </p>
+                    </div>
                   )}
                 </div>
               ))}

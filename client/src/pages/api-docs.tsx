@@ -255,8 +255,17 @@ export default function ApiDocs() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm">
-            When an invoice is paid, Altostratus Payments will send a POST request to your configured webhook URL with the following payload:
+            When an invoice is paid, Altostratus Payments will send a POST request to your configured webhook URL with HMAC-SHA256 signature for security.
           </p>
+          <div className="space-y-2 mb-4">
+            <h4 className="text-sm font-semibold">Security Headers</h4>
+            <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-md p-3">
+              <p className="text-xs font-medium text-blue-900 dark:text-blue-100 mb-1">X-Altostratus-Signature</p>
+              <p className="text-xs text-blue-800 dark:text-blue-200">
+                HMAC-SHA256 signature of the payload using ALT_WEBHOOK_SECRET. Verify this signature to ensure the webhook is authentic.
+              </p>
+            </div>
+          </div>
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-semibold">Webhook Payload</h4>
             <CopyButton
@@ -280,8 +289,18 @@ export default function ApiDocs() {
               }, null, 2)}
             </code>
           </pre>
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold">Reliability Features</h4>
+            <ul className="text-xs text-muted-foreground space-y-1">
+              <li>• Persistent queue - survives server restarts</li>
+              <li>• Automatic retries with exponential backoff</li>
+              <li>• Up to 10 attempts or 24 hours (configurable)</li>
+              <li>• Each retry signed with same HMAC secret</li>
+              <li>• Minimal logging (counter + timestamp only)</li>
+            </ul>
+          </div>
           <p className="text-xs text-muted-foreground">
-            Set the ALTOSTRATUS_WEBHOOK_URL environment variable to configure where notifications are sent.
+            Set ALTOSTRATUS_WEBHOOK_URL and ALT_WEBHOOK_SECRET environment variables.
           </p>
         </CardContent>
       </Card>
@@ -300,8 +319,16 @@ export default function ApiDocs() {
               <p className="text-xs text-muted-foreground">Webhook timeout in milliseconds (default: 10000)</p>
             </div>
             <div>
-              <h4 className="text-sm font-semibold mb-1">WEBHOOK_RETRY_ATTEMPTS</h4>
-              <p className="text-xs text-muted-foreground">Number of webhook retry attempts (default: 3)</p>
+              <h4 className="text-sm font-semibold mb-1">ALT_WEBHOOK_SECRET</h4>
+              <p className="text-xs text-muted-foreground">Secret for HMAC-SHA256 signing of webhooks</p>
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold mb-1">WEBHOOK_MAX_ATTEMPTS</h4>
+              <p className="text-xs text-muted-foreground">Maximum webhook retry attempts (default: 10)</p>
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold mb-1">WEBHOOK_MAX_AGE_HOURS</h4>
+              <p className="text-xs text-muted-foreground">Auto-cleanup failed webhooks after hours (default: 24)</p>
             </div>
             <div>
               <h4 className="text-sm font-semibold mb-1">WEBHOOK_RETRY_DELAY_1/2/3</h4>
@@ -347,8 +374,26 @@ export default function ApiDocs() {
               </code>
             </pre>
           </div>
+          <div>
+            <h4 className="text-sm font-semibold mb-2">Webhook Queue Processing (Optional)</h4>
+            <p className="text-xs text-muted-foreground mb-2">Process pending webhooks manually (automatic by default every 5 seconds):</p>
+            <pre className="bg-muted p-3 rounded-md overflow-x-auto">
+              <code className="text-xs font-mono">
+                {`*/5 * * * * curl -X POST ${baseUrl}/api/webhooks/process-queue`}
+              </code>
+            </pre>
+          </div>
+          <div>
+            <h4 className="text-sm font-semibold mb-2">Webhook Cleanup (Optional)</h4>
+            <p className="text-xs text-muted-foreground mb-2">Clean up old failed webhooks manually (automatic every hour):</p>
+            <pre className="bg-muted p-3 rounded-md overflow-x-auto">
+              <code className="text-xs font-mono">
+                {`0 * * * * curl -X POST ${baseUrl}/api/webhooks/cleanup`}
+              </code>
+            </pre>
+          </div>
           <p className="text-xs text-muted-foreground">
-            You can use external cron services, systemd timers, or cloud schedulers to call these endpoints.
+            Note: Webhook processing and cleanup run automatically. These manual endpoints are optional for external schedulers.
           </p>
         </CardContent>
       </Card>

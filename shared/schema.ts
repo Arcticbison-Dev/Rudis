@@ -33,13 +33,13 @@ export const webhookLogs = pgTable("webhook_logs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   invoiceId: varchar("invoice_id").notNull(),
   url: text("url").notNull(),
-  status: varchar("status", { length: 20 }).notNull(),
+  status: varchar("status", { length: 20 }).notNull(), // pending, success, failed
   statusCode: varchar("status_code", { length: 10 }),
   errorMessage: text("error_message"),
-  payload: text("payload"),
-  responseBody: text("response_body"),
   attempt: varchar("attempt", { length: 10 }).default("1"),
+  retryAfter: timestamp("retry_after"), // When to retry next (for persistent queue)
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  lastAttemptAt: timestamp("last_attempt_at"),
 });
 
 export type WebhookLog = typeof webhookLogs.$inferSelect;

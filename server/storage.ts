@@ -26,11 +26,20 @@ export interface IStorage {
     status: string;
     statusCode?: number;
     errorMessage?: string;
-    payload?: string;
-    responseBody?: string;
     attempt?: number;
+    retryAfter?: Date | null;
   }): Promise<WebhookLog>;
+  updateWebhookLog(id: string, updates: {
+    status?: string;
+    statusCode?: number;
+    errorMessage?: string;
+    attempt?: number;
+    retryAfter?: Date | null;
+    lastAttemptAt?: Date;
+  }): Promise<WebhookLog | undefined>;
   getWebhookLogsByInvoice(invoiceId: string): Promise<WebhookLog[]>;
+  getPendingWebhooks(): Promise<WebhookLog[]>;
+  deleteOldFailedWebhooks(cutoffDate: Date, maxAttempts: number): Promise<number>;
   
   // Template operations
   createTemplate(template: InsertTemplate): Promise<Template>;
@@ -135,9 +144,8 @@ export class MemStorage implements IStorage {
     status: string;
     statusCode?: number;
     errorMessage?: string;
-    payload?: string;
-    responseBody?: string;
     attempt?: number;
+    retryAfter?: Date | null;
   }): Promise<WebhookLog> {
     const id = randomUUID();
     const webhookLog: WebhookLog = {
@@ -147,14 +155,39 @@ export class MemStorage implements IStorage {
       status: log.status,
       statusCode: log.statusCode?.toString() || null,
       errorMessage: log.errorMessage || null,
-      payload: log.payload || null,
-      responseBody: log.responseBody || null,
       attempt: log.attempt?.toString() || "1",
+      retryAfter: log.retryAfter || null,
       createdAt: new Date(),
+      lastAttemptAt: null,
     };
 
     this.webhookLogs.set(id, webhookLog);
     return webhookLog;
+  }
+
+  async updateWebhookLog(id: string, updates: {
+    status?: string;
+    statusCode?: number;
+    errorMessage?: string;
+    attempt?: number;
+    retryAfter?: Date | null;
+    lastAttemptAt?: Date;
+  }): Promise<WebhookLog | undefined> {
+    const log = this.webhookLogs.get(id);
+    if (!log) return undefined;
+
+    const updatedLog: WebhookLog = {
+      ...log,
+      ...(updates.status && { status: updates.status }),
+      ...(updates.statusCode && { statusCode: updates.statusCode.toString() }),
+      ...(updates.errorMessage !== undefined && { errorMessage: updates.errorMessage }),
+      ...(updates.attempt !== undefined && { attempt: updates.attempt.toString() }),
+      ...(updates.retryAfter !== undefined && { retryAfter: updates.retryAfter }),
+      ...(updates.lastAttemptAt && { lastAttemptAt: updates.lastAttemptAt }),
+    };
+
+    this.webhookLogs.set(id, updatedLog);
+    return updatedLog;
   }
 
   async getWebhookLogsByInvoice(invoiceId: string): Promise<WebhookLog[]> {
@@ -163,6 +196,28 @@ export class MemStorage implements IStorage {
       .sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
+  }
+
+  async getPendingWebhooks(): Promise<WebhookLog[]> {
+    return Array.from(this.webhookLogs.values())
+      .filter((log) => log.status === "pending");
+  }
+
+  async deleteOldFailedWebhooks(cutoffDate: Date, maxAttempts: number): Promise<number> {
+    let deletedCount = 0;
+    const logsToDelete = Array.from(this.webhookLogs.entries()).filter(([id, log]) => {
+      const isFailed = log.status === "failed";
+      const isOld = log.lastAttemptAt && new Date(log.lastAttemptAt) < cutoffDate;
+      const exceededAttempts = parseInt(log.attempt || "1", 10) >= maxAttempts;
+      return isFailed && (isOld || exceededAttempts);
+    });
+
+    for (const [id] of logsToDelete) {
+      this.webhookLogs.delete(id);
+      deletedCount++;
+    }
+
+    return deletedCount;
   }
 
   async checkAndExpireInvoices(): Promise<number> {
