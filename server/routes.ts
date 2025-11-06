@@ -5,9 +5,20 @@ import { insertInvoiceSchema, insertTemplateSchema } from "@shared/schema";
 import { paymentConfirmationSchema } from "@shared/webhook-schema";
 import axios, { AxiosError } from "axios";
 
-// Retry configuration for outbound webhooks
-const WEBHOOK_RETRY_ATTEMPTS = 3;
-const WEBHOOK_RETRY_DELAYS = [1000, 3000, 9000]; // Exponential backoff
+// Configuration from environment variables with sensible defaults and validation
+const parseIntWithDefault = (value: string | undefined, defaultValue: number): number => {
+  if (!value) return defaultValue;
+  const parsed = parseInt(value, 10);
+  return isNaN(parsed) ? defaultValue : parsed;
+};
+
+const WEBHOOK_TIMEOUT_MS = parseIntWithDefault(process.env.WEBHOOK_TIMEOUT_MS, 10000);
+const WEBHOOK_RETRY_ATTEMPTS = parseIntWithDefault(process.env.WEBHOOK_RETRY_ATTEMPTS, 3);
+const WEBHOOK_RETRY_DELAY_1 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_1, 1000);
+const WEBHOOK_RETRY_DELAY_2 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_2, 3000);
+const WEBHOOK_RETRY_DELAY_3 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_3, 9000);
+const WEBHOOK_RETRY_DELAYS = [WEBHOOK_RETRY_DELAY_1, WEBHOOK_RETRY_DELAY_2, WEBHOOK_RETRY_DELAY_3];
+const CLEANUP_EXPIRED_DAYS = Math.max(30, Math.min(90, parseIntWithDefault(process.env.CLEANUP_EXPIRED_DAYS, 90)));
 
 async function sendWebhookWithRetry(
   url: string,
@@ -17,7 +28,7 @@ async function sendWebhookWithRetry(
 ): Promise<{ success: boolean; statusCode?: number; error?: string; responseBody?: string }> {
   try {
     const response = await axios.post(url, payload, {
-      timeout: 10000,
+      timeout: WEBHOOK_TIMEOUT_MS,
       headers: {
         "Content-Type": "application/json",
         "User-Agent": "Altostratus-Payments/1.0",
@@ -145,6 +156,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ message: "Invoice already paid" });
       }
 
+      // Prevent payment of expired invoices - each payment must create new invoice
+      if (invoice.status === "expired") {
+        console.warn(`Payment attempt rejected for expired invoice: ${invoiceId}`);
+        return res.status(400).json({ 
+          error: "Invoice has expired",
+          message: "This invoice has expired. Please create a new invoice to make a payment."
+        });
+      }
+
+      // Double-check expiration even if status not yet updated
+      if (invoice.expiresAt && new Date(invoice.expiresAt) <= new Date()) {
+        console.warn(`Payment attempt rejected for expired invoice (past expiresAt): ${invoiceId}`);
+        // Update the status to expired
+        await storage.updateInvoiceStatus(invoiceId, "expired");
+        return res.status(400).json({ 
+          error: "Invoice has expired",
+          message: "This invoice has expired. Please create a new invoice to make a payment."
+        });
+      }
+
       // Store payment transaction details
       await storage.createPaymentTransaction({
         invoiceId,
@@ -247,6 +278,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Error checking expired invoices:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Cleanup old expired invoices (can be called by external scheduler/cron)
+  app.post("/api/invoices/cleanup", async (req, res) => {
+    try {
+      // Enforce 30-90 day retention window
+      const requestedDays = req.body.daysOld || CLEANUP_EXPIRED_DAYS;
+      const daysOld = Math.max(30, Math.min(90, requestedDays));
+      
+      if (requestedDays !== daysOld) {
+        console.warn(`Cleanup daysOld adjusted from ${requestedDays} to ${daysOld} (must be 30-90)`);
+      }
+      
+      const purgedCount = await storage.purgeExpiredInvoices(daysOld);
+      console.log(`✓ Cleanup completed: ${purgedCount} expired invoice(s) purged (older than ${daysOld} days)`);
+      res.json({
+        success: true,
+        purgedCount,
+        daysOld,
+        message: `${purgedCount} expired invoice(s) purged`,
+      });
+    } catch (error: any) {
+      console.error("Error purging expired invoices:", error);
       res.status(500).json({ error: error.message });
     }
   });

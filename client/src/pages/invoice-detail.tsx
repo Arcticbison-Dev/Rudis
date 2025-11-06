@@ -232,7 +232,7 @@ export default function InvoiceDetail() {
                 </div>
               )}
 
-              {invoice.status === "pending" && invoice.expiresAt && new Date(invoice.expiresAt) < new Date(Date.now() + 3600000) && new Date(invoice.expiresAt) > new Date() && (
+              {invoice.status === "pending" && invoice.expiresAt && new Date(invoice.expiresAt) < new Date(Date.now() + (parseInt(import.meta.env.VITE_EXPIRING_SOON_HOURS || "1") * 3600000)) && new Date(invoice.expiresAt) > new Date() && (
                 <div className="pt-4">
                   <div className="bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-800 rounded-md p-4 flex items-start gap-2">
                     <Clock className="h-4 w-4 text-orange-600 dark:text-orange-400 shrink-0 mt-0.5" />

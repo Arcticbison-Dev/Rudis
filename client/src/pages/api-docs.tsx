@@ -68,7 +68,7 @@ export default function ApiDocs() {
       method: "POST",
       path: "/api/webhooks/payment-confirmed",
       title: "Payment Confirmation Webhook",
-      description: "Webhook endpoint for blockchain listeners to notify payment confirmations",
+      description: "Webhook endpoint for blockchain listeners to notify payment confirmations. Returns 400 error if invoice is expired - each payment must use a new invoice.",
       requestBody: {
         invoiceId: "550e8400-e29b-41d4-a716-446655440000",
         transactionId: "abc123def456...",
@@ -113,6 +113,32 @@ export default function ApiDocs() {
           confirmedAt: "2025-11-04T12:30:00Z",
         },
       ],
+    },
+    {
+      method: "POST",
+      path: "/api/invoices/check-expired",
+      title: "Check Expired Invoices",
+      description: "Manual trigger to check and expire invoices. Can be called by external scheduler/cron.",
+      response: {
+        success: true,
+        expiredCount: 2,
+        message: "2 invoice(s) expired",
+      },
+    },
+    {
+      method: "POST",
+      path: "/api/invoices/cleanup",
+      title: "Cleanup Old Expired Invoices",
+      description: "Purge expired invoices older than specified days (30-90 range enforced, default: 90). Can be called by external scheduler/cron.",
+      requestBody: {
+        daysOld: 90,
+      },
+      response: {
+        success: true,
+        purgedCount: 15,
+        daysOld: 90,
+        message: "15 expired invoice(s) purged",
+      },
     },
   ];
 
@@ -256,6 +282,73 @@ export default function ApiDocs() {
           </pre>
           <p className="text-xs text-muted-foreground">
             Set the ALTOSTRATUS_WEBHOOK_URL environment variable to configure where notifications are sent.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Environment Variables</CardTitle>
+          <CardDescription>
+            Configure timeouts, retry behavior, and cleanup settings
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4">
+            <div>
+              <h4 className="text-sm font-semibold mb-1">WEBHOOK_TIMEOUT_MS</h4>
+              <p className="text-xs text-muted-foreground">Webhook timeout in milliseconds (default: 10000)</p>
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold mb-1">WEBHOOK_RETRY_ATTEMPTS</h4>
+              <p className="text-xs text-muted-foreground">Number of webhook retry attempts (default: 3)</p>
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold mb-1">WEBHOOK_RETRY_DELAY_1/2/3</h4>
+              <p className="text-xs text-muted-foreground">Retry delays in ms for attempts 1, 2, 3 (default: 1000, 3000, 9000)</p>
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold mb-1">VITE_EXPIRING_SOON_HOURS</h4>
+              <p className="text-xs text-muted-foreground">Hours before expiration to show warning (default: 1)</p>
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold mb-1">CLEANUP_EXPIRED_DAYS</h4>
+              <p className="text-xs text-muted-foreground">Days to keep expired invoices before purging (default: 90)</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Scheduled Jobs</CardTitle>
+          <CardDescription>
+            Recommended cron jobs for automated maintenance
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <h4 className="text-sm font-semibold mb-2">Daily Expiration Check</h4>
+            <p className="text-xs text-muted-foreground mb-2">Run every hour to check and expire invoices:</p>
+            <pre className="bg-muted p-3 rounded-md overflow-x-auto">
+              <code className="text-xs font-mono">
+                {`0 * * * * curl -X POST ${baseUrl}/api/invoices/check-expired`}
+              </code>
+            </pre>
+          </div>
+          <div>
+            <h4 className="text-sm font-semibold mb-2">Daily Cleanup Job</h4>
+            <p className="text-xs text-muted-foreground mb-2">Run once per day to purge old expired invoices:</p>
+            <pre className="bg-muted p-3 rounded-md overflow-x-auto">
+              <code className="text-xs font-mono">
+                {`0 2 * * * curl -X POST ${baseUrl}/api/invoices/cleanup \\
+  -H "Content-Type: application/json" \\
+  -d '{"daysOld": 90}'`}
+              </code>
+            </pre>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            You can use external cron services, systemd timers, or cloud schedulers to call these endpoints.
           </p>
         </CardContent>
       </Card>

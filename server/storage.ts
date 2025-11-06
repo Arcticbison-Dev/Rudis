@@ -8,6 +8,7 @@ export interface IStorage {
   getAllInvoices(): Promise<Invoice[]>;
   updateInvoiceStatus(id: string, status: string, paidAt?: Date): Promise<Invoice | undefined>;
   checkAndExpireInvoices(): Promise<number>;
+  purgeExpiredInvoices(daysOld?: number): Promise<number>;
   
   // Payment transaction operations
   createPaymentTransaction(tx: {
@@ -238,6 +239,43 @@ export class MemStorage implements IStorage {
 
   async deleteTemplate(id: string): Promise<boolean> {
     return this.templates.delete(id);
+  }
+
+  async purgeExpiredInvoices(daysOld: number = 90): Promise<number> {
+    const cutoffDate = new Date(Date.now() - daysOld * 24 * 60 * 60 * 1000);
+    let purgedCount = 0;
+
+    const invoicesToPurge = Array.from(this.invoices.entries()).filter(([id, invoice]) => 
+      invoice.status === "expired" &&
+      invoice.expiresAt &&
+      new Date(invoice.expiresAt) < cutoffDate
+    );
+
+    for (const [id, invoice] of invoicesToPurge) {
+      // Delete related webhook logs
+      const logsToDelete = Array.from(this.webhookLogs.entries())
+        .filter(([logId, log]) => log.invoiceId === id)
+        .map(([logId]) => logId);
+      
+      for (const logId of logsToDelete) {
+        this.webhookLogs.delete(logId);
+      }
+
+      // Delete related payment transactions (if any exist for expired invoices)
+      const txsToDelete = Array.from(this.paymentTransactions.entries())
+        .filter(([txId, tx]) => tx.invoiceId === id)
+        .map(([txId]) => txId);
+      
+      for (const txId of txsToDelete) {
+        this.paymentTransactions.delete(txId);
+      }
+
+      // Delete the invoice
+      this.invoices.delete(id);
+      purgedCount++;
+    }
+
+    return purgedCount;
   }
 }
 
