@@ -29,6 +29,13 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLocation } from "wouter";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export default function Templates() {
   const [, setLocation] = useLocation();
@@ -36,27 +43,31 @@ export default function Templates() {
   const queryClient = useQueryClient();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
-  const [selectedCurrency, setSelectedCurrency] = useState<"BTC" | "Lightning" | "XMR">("BTC");
 
   const { data: templates, isLoading } = useQuery<Template[]>({
     queryKey: ["/api/templates"],
   });
 
-  const currencies = [
+  const assets = [
     { value: "BTC", label: "Bitcoin (BTC)" },
     { value: "Lightning", label: "Lightning Network" },
     { value: "XMR", label: "Monero (XMR)" },
   ] as const;
 
+  const intervals = [
+    { value: "one-time", label: "One-time" },
+    { value: "monthly", label: "Monthly" },
+    { value: "yearly", label: "Yearly" },
+  ] as const;
+
   const form = useForm<InsertTemplate>({
     resolver: zodResolver(insertTemplateSchema),
     defaultValues: {
-      name: "",
+      planName: "",
       description: "",
-      amount: "",
-      currency: "BTC",
-      paymentAddress: "",
-      expiresInHours: "",
+      amountUsd: "",
+      asset: "BTC",
+      interval: undefined,
     },
   });
 
@@ -136,39 +147,29 @@ export default function Templates() {
     }
   };
 
-  const handleDeleteTemplate = (id: string, name: string) => {
-    if (window.confirm(`Are you sure you want to delete "${name}"?`)) {
+  const handleDeleteTemplate = (id: string, planName: string) => {
+    if (window.confirm(`Are you sure you want to delete "${planName}"?`)) {
       deleteTemplateMutation.mutate(id);
     }
   };
 
   const handleEditClick = (template: Template) => {
     setEditingTemplate(template);
-    const currency = template.currency as "BTC" | "Lightning" | "XMR";
-    setSelectedCurrency(currency);
     form.reset({
-      name: template.name,
+      planName: template.planName,
       description: template.description || "",
-      amount: template.amount || "",
-      currency: currency,
-      paymentAddress: template.paymentAddress || "",
-      expiresInHours: template.expiresInHours || "",
+      amountUsd: template.amountUsd || "",
+      asset: template.asset as "BTC" | "Lightning" | "XMR",
+      interval: template.interval as "one-time" | "monthly" | "yearly" | undefined,
     });
   };
 
   const handleCreateFromTemplate = (template: Template) => {
     const invoiceData: any = {
-      amount: template.amount || "",
-      currency: template.currency,
-      paymentAddress: template.paymentAddress || "",
+      amount: template.amountUsd || "",
+      currency: template.asset,
       description: template.description || "",
     };
-
-    // Only add expiresAt if template has valid expiresInHours
-    if (template.expiresInHours && !isNaN(parseInt(template.expiresInHours))) {
-      const hours = parseInt(template.expiresInHours);
-      invoiceData.expiresAt = new Date(Date.now() + hours * 3600000).toISOString();
-    }
     
     setLocation(`/create?template=${encodeURIComponent(JSON.stringify(invoiceData))}`);
   };
@@ -193,7 +194,7 @@ export default function Templates() {
             Invoice Templates
           </h1>
           <p className="text-sm text-muted-foreground mt-2">
-            Create reusable templates for common invoice types
+            Create reusable plan templates with no user identifiers
           </p>
         </div>
         <Button onClick={() => setIsCreateDialogOpen(true)} data-testid="button-create-template">
@@ -208,7 +209,7 @@ export default function Templates() {
             <FileText className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">No templates yet</h3>
             <p className="text-sm text-muted-foreground mb-6 max-w-md">
-              Create your first template to quickly generate invoices with pre-filled information.
+              Create your first template to quickly generate invoices with pre-filled plan information.
             </p>
             <Button onClick={() => setIsCreateDialogOpen(true)} data-testid="button-create-first-template">
               <Plus className="h-4 w-4 mr-2" />
@@ -224,10 +225,15 @@ export default function Templates() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1">
                     <CardTitle className="flex items-center gap-2">
-                      {template.name}
+                      {template.planName}
                       <Badge variant="outline" className="font-mono text-xs">
-                        {template.currency}
+                        {template.asset}
                       </Badge>
+                      {template.interval && (
+                        <Badge variant="secondary" className="text-xs">
+                          {template.interval}
+                        </Badge>
+                      )}
                     </CardTitle>
                     {template.description && (
                       <CardDescription className="mt-2">{template.description}</CardDescription>
@@ -253,7 +259,7 @@ export default function Templates() {
                     <Button
                       variant="outline"
                       size="icon"
-                      onClick={() => handleDeleteTemplate(template.id, template.name)}
+                      onClick={() => handleDeleteTemplate(template.id, template.planName)}
                       data-testid={`button-delete-template-${template.id}`}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -261,28 +267,16 @@ export default function Templates() {
                   </div>
                 </div>
               </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                  {template.amount && (
+              {template.amountUsd && (
+                <CardContent>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
-                      <div className="text-muted-foreground mb-1">Amount</div>
-                      <div className="font-mono font-medium">{template.amount}</div>
+                      <div className="text-muted-foreground mb-1">Amount (USD)</div>
+                      <div className="font-mono font-medium">${template.amountUsd}</div>
                     </div>
-                  )}
-                  {template.paymentAddress && (
-                    <div className="col-span-2">
-                      <div className="text-muted-foreground mb-1">Payment Address</div>
-                      <div className="font-mono text-xs truncate">{template.paymentAddress}</div>
-                    </div>
-                  )}
-                  {template.expiresInHours && (
-                    <div>
-                      <div className="text-muted-foreground mb-1">Expires In</div>
-                      <div className="font-medium">{template.expiresInHours}h</div>
-                    </div>
-                  )}
-                </div>
-              </CardContent>
+                  </div>
+                </CardContent>
+              )}
             </Card>
           ))}
         </div>
@@ -304,8 +298,8 @@ export default function Templates() {
             <DialogTitle>{editingTemplate ? "Edit Template" : "Create Template"}</DialogTitle>
             <DialogDescription>
               {editingTemplate
-                ? "Update your invoice template"
-                : "Create a reusable template for common invoice types"}
+                ? "Update your plan template"
+                : "Create a reusable template with no user identifiers"}
             </DialogDescription>
           </DialogHeader>
           <Form {...form}>
@@ -315,14 +309,14 @@ export default function Templates() {
             >
               <FormField
                 control={form.control}
-                name="name"
+                name="planName"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Template Name</FormLabel>
+                    <FormLabel>Plan Name</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g. Monthly Subscription" {...field} data-testid="input-template-name" />
+                      <Input placeholder="e.g. Pro Monthly Plan" {...field} data-testid="input-template-planname" />
                     </FormControl>
-                    <FormDescription>A descriptive name for this template</FormDescription>
+                    <FormDescription>Descriptive name for this subscription plan</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -336,7 +330,7 @@ export default function Templates() {
                     <FormLabel>Description (Optional)</FormLabel>
                     <FormControl>
                       <Textarea
-                        placeholder="Additional details about this template"
+                        placeholder="Additional details about this plan"
                         {...field}
                         value={field.value || ""}
                         data-testid="input-template-description"
@@ -349,29 +343,24 @@ export default function Templates() {
 
               <FormField
                 control={form.control}
-                name="currency"
+                name="asset"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Currency</FormLabel>
-                    <FormControl>
-                      <div className="grid grid-cols-3 gap-3">
-                        {currencies.map((currency) => (
-                          <Button
-                            key={currency.value}
-                            type="button"
-                            variant={selectedCurrency === currency.value ? "default" : "outline"}
-                            className={`justify-center ${selectedCurrency === currency.value ? "" : "hover-elevate active-elevate-2"}`}
-                            onClick={() => {
-                              setSelectedCurrency(currency.value);
-                              field.onChange(currency.value);
-                            }}
-                            data-testid={`button-template-currency-${currency.value.toLowerCase()}`}
-                          >
-                            {currency.label}
-                          </Button>
+                    <FormLabel>Cryptocurrency Asset</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-template-asset">
+                          <SelectValue placeholder="Select cryptocurrency" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {assets.map((asset) => (
+                          <SelectItem key={asset.value} value={asset.value}>
+                            {asset.label}
+                          </SelectItem>
                         ))}
-                      </div>
-                    </FormControl>
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -379,15 +368,16 @@ export default function Templates() {
 
               <FormField
                 control={form.control}
-                name="amount"
+                name="amountUsd"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Amount (Optional)</FormLabel>
+                    <FormLabel>Amount in USD (Optional)</FormLabel>
                     <FormControl>
                       <Input
                         type="text"
-                        placeholder="0.00000000"
+                        placeholder="0.00"
                         {...field}
+                        value={field.value || ""}
                         data-testid="input-template-amount"
                       />
                     </FormControl>
@@ -399,42 +389,25 @@ export default function Templates() {
 
               <FormField
                 control={form.control}
-                name="paymentAddress"
+                name="interval"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Payment Address (Optional)</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="text"
-                        placeholder="Enter crypto address"
-                        className="font-mono text-sm"
-                        {...field}
-                        value={field.value || ""}
-                        data-testid="input-template-address"
-                      />
-                    </FormControl>
-                    <FormDescription>Leave empty to enter address when creating invoice</FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="expiresInHours"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Expires In (Hours, Optional)</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        placeholder="24"
-                        {...field}
-                        value={field.value || ""}
-                        data-testid="input-template-expires"
-                      />
-                    </FormControl>
-                    <FormDescription>How many hours until invoices created from this template expire</FormDescription>
+                    <FormLabel>Billing Interval (Optional)</FormLabel>
+                    <Select onValueChange={field.onChange} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger data-testid="select-template-interval">
+                          <SelectValue placeholder="Select billing interval" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {intervals.map((interval) => (
+                          <SelectItem key={interval.value} value={interval.value}>
+                            {interval.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>How often this plan bills</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

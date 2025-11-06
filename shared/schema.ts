@@ -57,12 +57,11 @@ export type PaymentTransaction = typeof paymentTransactions.$inferSelect;
 
 export const templates = pgTable("templates", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  name: text("name").notNull(),
+  planName: text("plan_name").notNull(),
+  asset: varchar("asset", { length: 10 }).notNull(),
+  amountUsd: text("amount_usd"),
+  interval: varchar("interval", { length: 20 }),
   description: text("description"),
-  amount: text("amount"),
-  currency: varchar("currency", { length: 10 }).notNull(),
-  paymentAddress: text("payment_address"),
-  expiresInHours: text("expires_in_hours"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -70,9 +69,10 @@ export const insertTemplateSchema = createInsertSchema(templates).omit({
   id: true,
   createdAt: true,
 }).extend({
-  name: z.string().min(1, "Template name is required"),
-  currency: z.enum(["BTC", "Lightning", "XMR"]),
-  amount: z.string().regex(/^\d+(\.\d{1,8})?$/, "Invalid amount format").optional(),
+  planName: z.string().min(1, "Plan name is required"),
+  asset: z.enum(["BTC", "Lightning", "XMR"]),
+  amountUsd: z.string().regex(/^\d+(\.\d{1,8})?$/, "Invalid amount format").optional(),
+  interval: z.enum(["one-time", "monthly", "yearly"]).optional(),
 });
 
 export type InsertTemplate = z.infer<typeof insertTemplateSchema>;

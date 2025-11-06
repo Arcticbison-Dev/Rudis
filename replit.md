@@ -23,6 +23,11 @@ MVP implementation with enhanced features:
 - Beautiful, responsive UI following design guidelines with dark mode support
 
 ## Recent Changes
+- 2025-11-06: Template schema privacy update
+  - **No User Identifiers**: Templates now only store { templateId, planName, asset, amountUsd, interval, description }
+  - **Removed Fields**: Eliminated paymentAddress (user identifier) and expiresInHours from templates
+  - **New Field**: Added interval field for billing cycle (one-time, monthly, yearly)
+  - **Field Renames**: name → planName, currency → asset, amount → amountUsd for clarity
 - 2025-11-06: Webhook reliability and security enhancements
   - **HMAC Signing**: All webhooks signed with X-Altostratus-Signature header using ALT_WEBHOOK_SECRET (HMAC-SHA256)
   - **Persistent Queue**: Webhooks survive server restarts, continue from where they left off, process every 5 seconds
@@ -127,15 +132,15 @@ MVP implementation with enhanced features:
 - `blockHeight`: Block number (nullable)
 - `confirmedAt`: Confirmation timestamp
 
-**Template Model:**
-- `id`: UUID
-- `name`: Template name
-- `description`: Template description (nullable)
-- `amount`: Preset amount (nullable)
-- `currency`: BTC | Lightning | XMR
-- `paymentAddress`: Preset address (nullable)
-- `expiresInHours`: Default expiry duration (nullable)
+**Template Model (No User Identifiers):**
+- `id`: UUID (templateId)
+- `planName`: Plan name (e.g., "Pro Monthly")
+- `asset`: BTC | Lightning | XMR
+- `amountUsd`: Preset amount in USD (nullable)
+- `interval`: one-time | monthly | yearly (nullable)
+- `description`: Plan description (nullable)
 - `createdAt`: Timestamp
+- Note: Templates intentionally exclude user identifiers like wallet addresses or user IDs
 
 ## User Preferences
 - Privacy-first: No third-party services, no KYC
