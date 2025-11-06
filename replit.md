@@ -11,14 +11,23 @@ A self-hosted crypto payment invoice system that creates invoices, displays them
 - Send webhook notifications to the main Altostratus app when invoices are paid
 
 ## Current State
-MVP implementation with:
-- Complete schema for invoices and webhook logs
-- Full frontend with dashboard, invoice creation, invoice detail pages, and API documentation
+MVP implementation with enhanced features:
+- Complete schema for invoices, webhook logs, payment transactions, and templates
+- Full frontend with dashboard, invoice creation, invoice detail, templates, and API documentation pages
+- Template management system for reusable invoice configurations
+- Invoice expiration system with automatic checking and UI warnings
+- Webhook retry history display showing all delivery attempts
+- Payment transaction history for paid invoices with blockchain details
 - In-memory storage (ready for pluggable blockchain listeners)
 - Simulated payment confirmation system for testing
-- Beautiful, responsive UI following design guidelines
+- Beautiful, responsive UI following design guidelines with dark mode support
 
 ## Recent Changes
+- 2025-11-06: Completed four major feature enhancements
+  - **Invoice Expiration**: Automatic expiration checking via POST /api/invoices/check-expired, UI warnings for expired/expiring invoices
+  - **Webhook Retry Display**: Full webhook attempt history on invoice detail page with status codes, error messages, response bodies
+  - **Template Creation**: Complete template CRUD with dedicated /templates page, create-invoice-from-template workflow, text-based schema for consistency
+  - **Payment History**: Transaction display for paid invoices showing transaction IDs, confirmations, block height, timestamps with copy functionality
 - 2025-11-04: Initial MVP implementation
   - Defined invoice data schema with TypeScript interfaces
   - Built all React components with exceptional visual quality
@@ -47,8 +56,9 @@ MVP implementation with:
 
 #### Pages
 - `/` - Dashboard with invoice list and statistics
-- `/create` - Create new invoice form
-- `/invoice/:id` - Invoice detail with QR code and payment info
+- `/create` - Create new invoice form (supports template pre-fill via query params)
+- `/invoice/:id` - Invoice detail with QR code, payment info, webhook logs, and transaction history
+- `/templates` - Template management with create/edit/delete/use actions
 - `/api-docs` - API documentation and examples
 
 ### Backend (`server/`)
@@ -57,12 +67,24 @@ MVP implementation with:
 - **REST API** for invoice CRUD operations
 - **Webhook system** for incoming payment confirmations and outgoing notifications
 
-#### API Endpoints (planned)
+#### API Endpoints
+**Invoices:**
 - `POST /api/invoices` - Create new invoice
-- `GET /api/invoices` - List all invoices
-- `GET /api/invoices/:id` - Get invoice by ID
+- `GET /api/invoices` - List all invoices (auto-checks expiration)
+- `GET /api/invoices/:id` - Get invoice by ID (auto-checks expiration)
+- `POST /api/invoices/check-expired` - Manual expiration check for schedulers
+- `GET /api/invoices/:id/webhook-logs` - Get webhook delivery history
+- `GET /api/invoices/:id/transactions` - Get payment transactions
+
+**Templates:**
+- `POST /api/templates` - Create template
+- `GET /api/templates` - List all templates
+- `GET /api/templates/:id` - Get template by ID
+- `PATCH /api/templates/:id` - Update template
+- `DELETE /api/templates/:id` - Delete template
+
+**Webhooks:**
 - `POST /api/webhooks/payment-confirmed` - Receive payment confirmation from blockchain listener
-- Internal webhook sender to notify main Altostratus app
 
 ### Data Schema (`shared/schema.ts`)
 **Invoice Model:**
@@ -81,6 +103,28 @@ MVP implementation with:
 - `invoiceId`: Reference to invoice
 - `url`: Webhook destination URL
 - `status`: success | failed
+- `statusCode`: HTTP status code (nullable)
+- `errorMessage`: Error details (nullable)
+- `responseBody`: Webhook response (nullable)
+- `attempt`: Attempt number
+- `createdAt`: Timestamp
+
+**PaymentTransaction Model:**
+- `id`: UUID
+- `invoiceId`: Reference to invoice
+- `transactionId`: Blockchain transaction hash
+- `confirmations`: Number of confirmations
+- `blockHeight`: Block number (nullable)
+- `confirmedAt`: Confirmation timestamp
+
+**Template Model:**
+- `id`: UUID
+- `name`: Template name
+- `description`: Template description (nullable)
+- `amount`: Preset amount (nullable)
+- `currency`: BTC | Lightning | XMR
+- `paymentAddress`: Preset address (nullable)
+- `expiresInHours`: Default expiry duration (nullable)
 - `createdAt`: Timestamp
 
 ## User Preferences
@@ -101,22 +145,18 @@ Following `design_guidelines.md`:
 
 ## Development Status
 **Phase 1 Complete:** Schema & Frontend ✓
-- All data models defined
-- All React components built with exceptional quality
-- Design system configured
-- Theme system implemented
+**Phase 2 Complete:** Backend Implementation ✓
+**Phase 3 Complete:** Enhanced Features ✓
 
-**Phase 2 Pending:** Backend Implementation
-- API endpoints
-- Storage interface
-- Simulated payment confirmation
-- Webhook sender/receiver
-
-**Phase 3 Pending:** Integration & Testing
-- Connect frontend to backend
-- Add error handling and loading states
-- Test core functionality
-- Architect review
+All features implemented and architect-reviewed:
+- Invoice expiration with automatic checking
+- Webhook retry history display
+- Template management system
+- Payment transaction history
+- Complete CRUD operations for all entities
+- Simulated payment confirmation endpoint
+- Error handling and loading states
+- Dark mode support throughout
 
 ## Future Enhancements
 - Real Lightning Network listener integration
