@@ -11,6 +11,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { QRCodeSVG } from "qrcode.react";
 import { format, formatDistanceToNow } from "date-fns";
 
+function getExplorerUrl(currency: string, transactionId: string): string {
+  switch (currency) {
+    case "BTC":
+      return `https://mempool.space/tx/${transactionId}`;
+    case "Lightning":
+      return "";
+    case "XMR":
+      return `https://xmrchain.net/tx/${transactionId}`;
+    default:
+      return "";
+  }
+}
+
 export default function InvoiceDetail() {
   const { id } = useParams();
   
@@ -104,22 +117,9 @@ export default function InvoiceDetail() {
                 includeMargin={false}
               />
             </div>
-            <div className="w-full space-y-3">
-              <div>
-                <label className="text-sm font-medium block mb-2">
-                  Payment Address
-                </label>
-                <div className="flex items-center gap-2">
-                  <code
-                    className="flex-1 text-xs font-mono bg-muted px-3 py-2 rounded-md break-all"
-                    data-testid="text-payment-address"
-                  >
-                    {invoice.paymentAddress}
-                  </code>
-                  <CopyButton value={invoice.paymentAddress} />
-                </div>
-              </div>
-            </div>
+            <p className="text-sm text-muted-foreground text-center">
+              Scan this QR code with your {invoice.currency} wallet to make payment
+            </p>
           </CardContent>
         </Card>
 
@@ -329,15 +329,35 @@ export default function InvoiceDetail() {
                       </div>
                       <div className="flex items-center gap-2 text-sm">
                         <Hash className="w-3 h-3 text-muted-foreground shrink-0" />
-                        <code className="text-xs font-mono text-muted-foreground break-all">
+                        <code className="text-xs font-mono text-muted-foreground break-all" data-testid={`text-tx-hash-${tx.id}`}>
                           {tx.transactionId}
                         </code>
                         <CopyButton value={tx.transactionId} />
                       </div>
                     </div>
-                    <div className="text-xs text-muted-foreground text-right">
-                      <div>{format(new Date(tx.confirmedAt), "PPp")}</div>
-                      <div>{formatDistanceToNow(new Date(tx.confirmedAt), { addSuffix: true })}</div>
+                    <div className="flex flex-col items-end gap-2">
+                      <div className="text-xs text-muted-foreground text-right">
+                        <div>{format(new Date(tx.confirmedAt), "PPp")}</div>
+                        <div>{formatDistanceToNow(new Date(tx.confirmedAt), { addSuffix: true })}</div>
+                      </div>
+                      {getExplorerUrl(invoice.currency, tx.transactionId) && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          asChild
+                          data-testid={`button-explorer-${tx.id}`}
+                        >
+                          <a
+                            href={getExplorerUrl(invoice.currency, tx.transactionId)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            View on Explorer
+                          </a>
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </div>

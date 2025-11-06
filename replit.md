@@ -23,6 +23,12 @@ MVP implementation with enhanced features:
 - Beautiful, responsive UI following design guidelines with dark mode support
 
 ## Recent Changes
+- 2025-11-06: Privacy-focused invoice display with blockchain explorer links
+  - **Hidden Wallet Addresses**: Invoice detail page no longer displays full payment addresses for privacy
+  - **QR Code Only**: Users scan QR code to pay without exposing addresses in UI
+  - **Blockchain Explorer Links**: "View on Explorer" buttons for BTC (mempool.space) and XMR (xmrchain.net) transactions
+  - **Client-Side Navigation**: Explorer links open directly in browser without backend tracking
+  - **Minimal Display**: Shows only status, amount, currency, timestamps, and transaction hashes
 - 2025-11-06: Template isolation and persistence
   - **Separate Storage**: Templates stored in dedicated templates.json file (not in-memory with invoices)
   - **File Persistence**: Templates persist across server restarts, auto-load on startup
