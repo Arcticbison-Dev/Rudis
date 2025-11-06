@@ -1,4 +1,4 @@
-import { type Invoice, type InsertInvoice, type WebhookLog, type PaymentTransaction } from "@shared/schema";
+import { type Invoice, type InsertInvoice, type WebhookLog, type PaymentTransaction, type Template, type InsertTemplate } from "@shared/schema";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
@@ -30,17 +30,26 @@ export interface IStorage {
     attempt?: number;
   }): Promise<WebhookLog>;
   getWebhookLogsByInvoice(invoiceId: string): Promise<WebhookLog[]>;
+  
+  // Template operations
+  createTemplate(template: InsertTemplate): Promise<Template>;
+  getTemplate(id: string): Promise<Template | undefined>;
+  getAllTemplates(): Promise<Template[]>;
+  updateTemplate(id: string, template: Partial<InsertTemplate>): Promise<Template | undefined>;
+  deleteTemplate(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
   private invoices: Map<string, Invoice>;
   private webhookLogs: Map<string, WebhookLog>;
   private paymentTransactions: Map<string, PaymentTransaction>;
+  private templates: Map<string, Template>;
 
   constructor() {
     this.invoices = new Map();
     this.webhookLogs = new Map();
     this.paymentTransactions = new Map();
+    this.templates = new Map();
   }
 
   async createInvoice(insertInvoice: InsertInvoice): Promise<Invoice> {
@@ -176,6 +185,59 @@ export class MemStorage implements IStorage {
     }
 
     return expiredCount;
+  }
+
+  async createTemplate(insertTemplate: InsertTemplate): Promise<Template> {
+    const id = randomUUID();
+    const now = new Date();
+    
+    const template: Template = {
+      id,
+      name: insertTemplate.name,
+      description: insertTemplate.description || null,
+      amount: (insertTemplate.amount && insertTemplate.amount.trim() !== "") ? insertTemplate.amount : null,
+      currency: insertTemplate.currency,
+      paymentAddress: (insertTemplate.paymentAddress && insertTemplate.paymentAddress.trim() !== "") ? insertTemplate.paymentAddress : null,
+      expiresInHours: (insertTemplate.expiresInHours && insertTemplate.expiresInHours.trim() !== "") ? insertTemplate.expiresInHours : null,
+      createdAt: now,
+    };
+    
+    this.templates.set(id, template);
+    return template;
+  }
+
+  async getTemplate(id: string): Promise<Template | undefined> {
+    return this.templates.get(id);
+  }
+
+  async getAllTemplates(): Promise<Template[]> {
+    return Array.from(this.templates.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  async updateTemplate(id: string, updates: Partial<InsertTemplate>): Promise<Template | undefined> {
+    const template = this.templates.get(id);
+    if (!template) return undefined;
+
+    const sanitizedUpdates: Partial<Template> = {
+      ...updates,
+      ...(updates.amount !== undefined && { amount: (updates.amount && updates.amount.trim() !== "") ? updates.amount : null }),
+      ...(updates.paymentAddress !== undefined && { paymentAddress: (updates.paymentAddress && updates.paymentAddress.trim() !== "") ? updates.paymentAddress : null }),
+      ...(updates.expiresInHours !== undefined && { expiresInHours: (updates.expiresInHours && updates.expiresInHours.trim() !== "") ? updates.expiresInHours : null }),
+    };
+
+    const updatedTemplate: Template = {
+      ...template,
+      ...sanitizedUpdates,
+    };
+
+    this.templates.set(id, updatedTemplate);
+    return updatedTemplate;
+  }
+
+  async deleteTemplate(id: string): Promise<boolean> {
+    return this.templates.delete(id);
   }
 }
 

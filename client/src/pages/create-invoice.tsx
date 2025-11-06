@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { insertInvoiceSchema, type InsertInvoice } from "@shared/schema";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
-import { useLocation } from "wouter";
+import { useLocation, useSearch } from "wouter";
 import {
   Form,
   FormControl,
@@ -30,6 +30,7 @@ const currencies = [
 
 export default function CreateInvoice() {
   const [, setLocation] = useLocation();
+  const searchParams = useSearch();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [selectedCurrency, setSelectedCurrency] = useState<"BTC" | "Lightning" | "XMR">("BTC");
@@ -44,6 +45,27 @@ export default function CreateInvoice() {
       expiresAt: undefined,
     },
   });
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams);
+    const templateData = params.get("template");
+    if (templateData) {
+      try {
+        const data = JSON.parse(decodeURIComponent(templateData));
+        const currency = (data.currency || "BTC") as "BTC" | "Lightning" | "XMR";
+        setSelectedCurrency(currency);
+        form.reset({
+          amount: data.amount || "",
+          currency: currency,
+          description: data.description || "",
+          paymentAddress: data.paymentAddress || "",
+          expiresAt: data.expiresAt || undefined,
+        });
+      } catch (error) {
+        console.error("Failed to parse template data:", error);
+      }
+    }
+  }, [searchParams, form]);
 
   const createInvoiceMutation = useMutation({
     mutationFn: async (data: InsertInvoice) => {

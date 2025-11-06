@@ -8,9 +8,10 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import Dashboard from "@/pages/dashboard";
 import CreateInvoice from "@/pages/create-invoice";
 import InvoiceDetail from "@/pages/invoice-detail";
+import Templates from "@/pages/templates";
 import ApiDocs from "@/pages/api-docs";
 import NotFound from "@/pages/not-found";
-import { FileText, BookOpen, Plus } from "lucide-react";
+import { FileText, BookOpen, Plus, Layers } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 
@@ -20,6 +21,7 @@ function Router() {
       <Route path="/" component={Dashboard} />
       <Route path="/create" component={CreateInvoice} />
       <Route path="/invoice/:id" component={InvoiceDetail} />
+      <Route path="/templates" component={Templates} />
       <Route path="/api-docs" component={ApiDocs} />
       <Route component={NotFound} />
     </Switch>
@@ -32,6 +34,7 @@ function Header() {
   const navItems = [
     { path: "/", label: "Dashboard", icon: FileText },
     { path: "/create", label: "Create Invoice", icon: Plus },
+    { path: "/templates", label: "Templates", icon: Layers },
     { path: "/api-docs", label: "API Docs", icon: BookOpen },
   ];
 

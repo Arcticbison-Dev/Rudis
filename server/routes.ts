@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertInvoiceSchema } from "@shared/schema";
+import { insertInvoiceSchema, insertTemplateSchema } from "@shared/schema";
 import { paymentConfirmationSchema } from "@shared/webhook-schema";
 import axios, { AxiosError } from "axios";
 
@@ -247,6 +247,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       console.error("Error checking expired invoices:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Template CRUD operations
+  app.get("/api/templates", async (req, res) => {
+    try {
+      const templates = await storage.getAllTemplates();
+      res.json(templates);
+    } catch (error: any) {
+      console.error("Error fetching templates:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/templates/:id", async (req, res) => {
+    try {
+      const template = await storage.getTemplate(req.params.id);
+      if (!template) {
+        return res.status(404).json({ error: "Template not found" });
+      }
+      res.json(template);
+    } catch (error: any) {
+      console.error("Error fetching template:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/templates", async (req, res) => {
+    try {
+      const validatedData = insertTemplateSchema.parse(req.body);
+      const template = await storage.createTemplate(validatedData);
+      console.log(`✓ Template created: ${template.id} - ${template.name}`);
+      res.status(201).json(template);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        console.error("Invalid template data:", error.errors);
+        return res.status(400).json({ 
+          error: "Invalid template data", 
+          details: error.errors 
+        });
+      }
+      console.error("Error creating template:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.patch("/api/templates/:id", async (req, res) => {
+    try {
+      const validatedData = insertTemplateSchema.partial().parse(req.body);
+      const template = await storage.updateTemplate(req.params.id, validatedData);
+      if (!template) {
+        return res.status(404).json({ error: "Template not found" });
+      }
+      console.log(`✓ Template updated: ${template.id}`);
+      res.json(template);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        console.error("Invalid template data:", error.errors);
+        return res.status(400).json({ 
+          error: "Invalid template data", 
+          details: error.errors 
+        });
+      }
+      console.error("Error updating template:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/templates/:id", async (req, res) => {
+    try {
+      const deleted = await storage.deleteTemplate(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ error: "Template not found" });
+      }
+      console.log(`✓ Template deleted: ${req.params.id}`);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error deleting template:", error);
       res.status(500).json({ error: error.message });
     }
   });

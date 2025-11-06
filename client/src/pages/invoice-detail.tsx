@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useParams, Link } from "wouter";
-import { type Invoice, type WebhookLog } from "@shared/schema";
+import { type Invoice, type WebhookLog, type PaymentTransaction } from "@shared/schema";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Calendar, Clock, CheckCircle2, ExternalLink, AlertCircle } from "lucide-react";
+import { ArrowLeft, Calendar, Clock, CheckCircle2, ExternalLink, AlertCircle, Hash } from "lucide-react";
 import { StatusBadge } from "@/components/status-badge";
 import { CopyButton } from "@/components/copy-button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -22,9 +22,14 @@ export default function InvoiceDetail() {
     },
   });
 
-  const { data: webhookLogs, isLoading: webhookLogsLoading } = useQuery<WebhookLog[]>({
+  const { data: webhookLogs } = useQuery<WebhookLog[]>({
     queryKey: ["/api/invoices", id, "webhook-logs"],
     enabled: !!id,
+  });
+
+  const { data: transactions } = useQuery<PaymentTransaction[]>({
+    queryKey: ["/api/invoices", id, "transactions"],
+    enabled: !!id && invoice?.status === "paid",
   });
 
   if (isLoading) {
@@ -291,6 +296,56 @@ export default function InvoiceDetail() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Payment Transactions Section */}
+      {transactions && transactions.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Payment Transactions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {transactions.map((tx) => (
+                <div
+                  key={tx.id}
+                  className="border rounded-md p-4 space-y-3"
+                  data-testid={`transaction-${tx.id}`}
+                >
+                  <div className="flex items-start justify-between gap-4 flex-wrap">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Badge className="bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800">
+                          <CheckCircle2 className="w-3 h-3 mr-1" />
+                          Confirmed
+                        </Badge>
+                        <Badge variant="outline" className="font-mono text-xs">
+                          {tx.confirmations} confirmations
+                        </Badge>
+                        {tx.blockHeight && (
+                          <Badge variant="outline" className="font-mono text-xs">
+                            Block {tx.blockHeight}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-sm">
+                        <Hash className="w-3 h-3 text-muted-foreground shrink-0" />
+                        <code className="text-xs font-mono text-muted-foreground break-all">
+                          {tx.transactionId}
+                        </code>
+                        <CopyButton value={tx.transactionId} />
+                      </div>
+                    </div>
+                    <div className="text-xs text-muted-foreground text-right">
+                      <div>{format(new Date(tx.confirmedAt), "PPp")}</div>
+                      <div>{formatDistanceToNow(new Date(tx.confirmedAt), { addSuffix: true })}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Webhook Logs Section */}
       {webhookLogs && webhookLogs.length > 0 && (
