@@ -23,6 +23,11 @@ MVP implementation with enhanced features:
 - Beautiful, responsive UI following design guidelines with dark mode support
 
 ## Recent Changes
+- 2025-11-06: Template isolation and persistence
+  - **Separate Storage**: Templates stored in dedicated templates.json file (not in-memory with invoices)
+  - **File Persistence**: Templates persist across server restarts, auto-load on startup
+  - **New Invoice IDs**: Always generate fresh UUID for invoices created from templates (never reuse template ID)
+  - **Zero Contamination**: Complete separation between template storage and active invoice storage
 - 2025-11-06: Template schema privacy update
   - **No User Identifiers**: Templates now only store { templateId, planName, asset, amountUsd, interval, description }
   - **Removed Fields**: Eliminated paymentAddress (user identifier) and expiresInHours from templates

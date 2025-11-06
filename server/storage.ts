@@ -1,5 +1,7 @@
 import { type Invoice, type InsertInvoice, type WebhookLog, type PaymentTransaction, type Template, type InsertTemplate } from "@shared/schema";
 import { randomUUID } from "crypto";
+import { readFile, writeFile } from "fs/promises";
+import { existsSync } from "fs";
 
 export interface IStorage {
   // Invoice operations
@@ -54,12 +56,43 @@ export class MemStorage implements IStorage {
   private webhookLogs: Map<string, WebhookLog>;
   private paymentTransactions: Map<string, PaymentTransaction>;
   private templates: Map<string, Template>;
+  private readonly templatesFile = "templates.json";
 
   constructor() {
     this.invoices = new Map();
     this.webhookLogs = new Map();
     this.paymentTransactions = new Map();
     this.templates = new Map();
+    this.loadTemplatesFromFile().catch(err => 
+      console.error("Failed to load templates:", err)
+    );
+  }
+
+  private async loadTemplatesFromFile(): Promise<void> {
+    try {
+      if (existsSync(this.templatesFile)) {
+        const data = await readFile(this.templatesFile, "utf-8");
+        const templates: Template[] = JSON.parse(data);
+        for (const template of templates) {
+          this.templates.set(template.id, {
+            ...template,
+            createdAt: new Date(template.createdAt),
+          });
+        }
+        console.log(`✓ Loaded ${templates.length} template(s) from ${this.templatesFile}`);
+      }
+    } catch (error) {
+      console.error(`Error loading templates from ${this.templatesFile}:`, error);
+    }
+  }
+
+  private async saveTemplatesToFile(): Promise<void> {
+    try {
+      const templates = Array.from(this.templates.values());
+      await writeFile(this.templatesFile, JSON.stringify(templates, null, 2), "utf-8");
+    } catch (error) {
+      console.error(`Error saving templates to ${this.templatesFile}:`, error);
+    }
   }
 
   async createInvoice(insertInvoice: InsertInvoice): Promise<Invoice> {
@@ -249,16 +282,17 @@ export class MemStorage implements IStorage {
     
     const template: Template = {
       id,
-      name: insertTemplate.name,
+      planName: insertTemplate.planName,
+      asset: insertTemplate.asset,
+      amountUsd: (insertTemplate.amountUsd && insertTemplate.amountUsd.trim() !== "") ? insertTemplate.amountUsd : null,
+      interval: insertTemplate.interval || null,
       description: insertTemplate.description || null,
-      amount: (insertTemplate.amount && insertTemplate.amount.trim() !== "") ? insertTemplate.amount : null,
-      currency: insertTemplate.currency,
-      paymentAddress: (insertTemplate.paymentAddress && insertTemplate.paymentAddress.trim() !== "") ? insertTemplate.paymentAddress : null,
-      expiresInHours: (insertTemplate.expiresInHours && insertTemplate.expiresInHours.trim() !== "") ? insertTemplate.expiresInHours : null,
       createdAt: now,
     };
     
     this.templates.set(id, template);
+    await this.saveTemplatesToFile();
+    console.log(`✓ Template created and saved: ${template.id} - ${template.planName}`);
     return template;
   }
 
@@ -278,9 +312,8 @@ export class MemStorage implements IStorage {
 
     const sanitizedUpdates: Partial<Template> = {
       ...updates,
-      ...(updates.amount !== undefined && { amount: (updates.amount && updates.amount.trim() !== "") ? updates.amount : null }),
-      ...(updates.paymentAddress !== undefined && { paymentAddress: (updates.paymentAddress && updates.paymentAddress.trim() !== "") ? updates.paymentAddress : null }),
-      ...(updates.expiresInHours !== undefined && { expiresInHours: (updates.expiresInHours && updates.expiresInHours.trim() !== "") ? updates.expiresInHours : null }),
+      ...(updates.amountUsd !== undefined && { amountUsd: (updates.amountUsd && updates.amountUsd.trim() !== "") ? updates.amountUsd : null }),
+      ...(updates.interval !== undefined && { interval: updates.interval || null }),
     };
 
     const updatedTemplate: Template = {
@@ -289,11 +322,18 @@ export class MemStorage implements IStorage {
     };
 
     this.templates.set(id, updatedTemplate);
+    await this.saveTemplatesToFile();
+    console.log(`✓ Template updated and saved: ${updatedTemplate.id} - ${updatedTemplate.planName}`);
     return updatedTemplate;
   }
 
   async deleteTemplate(id: string): Promise<boolean> {
-    return this.templates.delete(id);
+    const deleted = this.templates.delete(id);
+    if (deleted) {
+      await this.saveTemplatesToFile();
+      console.log(`✓ Template deleted and file updated: ${id}`);
+    }
+    return deleted;
   }
 
   async purgeExpiredInvoices(daysOld: number = 90): Promise<number> {
