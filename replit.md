@@ -83,3 +83,6 @@ All 10 production readiness phases completed:
 - `docs/CRYPTO_PAYMENT_POLICY.md`: Payment handling policies and compliance
 - `docs/STATUS_SEMANTICS.md`: Invoice status definitions and transitions
 - `docs/CANARY_DEPLOYMENT_GUIDE.md`: Phased production rollout guide (testnet → LN → BTC → XMR)
+- `docs/LN_INTEGRATION_PLAN_V2.md`: Lightning Network (LND) implementation guide with TypeScript reference
+- `docs/LN_INTEGRATION_REVIEW.md`: Review of original LN integration plan with gap analysis
+- `docs/LN_IMPLEMENTATION_CHECKLIST.md`: Complete implementation and validation checklist for LN integration
