@@ -83,6 +83,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get all invoices
   app.get("/api/invoices", async (req, res) => {
     try {
+      await storage.checkAndExpireInvoices();
       const invoices = await storage.getAllInvoices();
       res.json(invoices);
     } catch (error: any) {
@@ -94,6 +95,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get invoice by ID
   app.get("/api/invoices/:id", async (req, res) => {
     try {
+      await storage.checkAndExpireInvoices();
       const invoice = await storage.getInvoice(req.params.id);
       if (!invoice) {
         return res.status(404).json({ error: "Invoice not found" });
@@ -229,6 +231,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(transactions);
     } catch (error: any) {
       console.error("Error fetching payment transactions:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Check and expire invoices (can be called by external scheduler/cron)
+  app.post("/api/invoices/check-expired", async (req, res) => {
+    try {
+      const expiredCount = await storage.checkAndExpireInvoices();
+      console.log(`✓ Expiration check completed: ${expiredCount} invoice(s) expired`);
+      res.json({
+        success: true,
+        expiredCount,
+        message: `${expiredCount} invoice(s) expired`,
+      });
+    } catch (error: any) {
+      console.error("Error checking expired invoices:", error);
       res.status(500).json({ error: error.message });
     }
   });

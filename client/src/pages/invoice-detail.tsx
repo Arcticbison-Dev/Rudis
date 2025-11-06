@@ -210,6 +210,27 @@ export default function InvoiceDetail() {
                   </div>
                 </div>
               )}
+
+              {invoice.status === "expired" && (
+                <div className="pt-4">
+                  <div className="bg-slate-50 dark:bg-slate-900/30 border border-slate-200 dark:border-slate-700 rounded-md p-4">
+                    <p className="text-sm text-slate-900 dark:text-slate-100">
+                      This invoice has expired and can no longer be paid.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {invoice.status === "pending" && invoice.expiresAt && new Date(invoice.expiresAt) < new Date(Date.now() + 3600000) && new Date(invoice.expiresAt) > new Date() && (
+                <div className="pt-4">
+                  <div className="bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-800 rounded-md p-4 flex items-start gap-2">
+                    <Clock className="h-4 w-4 text-orange-600 dark:text-orange-400 shrink-0 mt-0.5" />
+                    <p className="text-sm text-orange-900 dark:text-orange-100">
+                      This invoice is expiring soon. Please complete payment before expiration.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

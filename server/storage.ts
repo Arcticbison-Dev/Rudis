@@ -7,6 +7,7 @@ export interface IStorage {
   getInvoice(id: string): Promise<Invoice | undefined>;
   getAllInvoices(): Promise<Invoice[]>;
   updateInvoiceStatus(id: string, status: string, paidAt?: Date): Promise<Invoice | undefined>;
+  checkAndExpireInvoices(): Promise<number>;
   
   // Payment transaction operations
   createPaymentTransaction(tx: {
@@ -152,6 +153,29 @@ export class MemStorage implements IStorage {
       .sort(
         (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
+  }
+
+  async checkAndExpireInvoices(): Promise<number> {
+    const now = new Date();
+    let expiredCount = 0;
+
+    const invoiceEntries = Array.from(this.invoices.entries());
+    for (const [id, invoice] of invoiceEntries) {
+      if (
+        invoice.status === "pending" &&
+        invoice.expiresAt &&
+        new Date(invoice.expiresAt) <= now
+      ) {
+        const updatedInvoice: Invoice = {
+          ...invoice,
+          status: "expired",
+        };
+        this.invoices.set(id, updatedInvoice);
+        expiredCount++;
+      }
+    }
+
+    return expiredCount;
   }
 }
 
