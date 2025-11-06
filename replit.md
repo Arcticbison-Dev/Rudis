@@ -22,6 +22,7 @@ Altostratus Payments consists of a React frontend and an Express.js backend, com
 - **Interactions:** Fast, responsive, with subtle animations and real-time updates.
 - **Features:** Dashboard, invoice creation, invoice detail with QR codes, template management, and API documentation.
 - **Theming:** Light/dark mode support.
+- **Privacy UX:** Privacy notice on invoice creation page informing users of data retention policy (90-day anonymization, 365-day deletion) with link to payment policy.
 
 **Technical Implementations:**
 - **In-memory storage (MemStorage)** for MVP, designed for pluggable blockchain listeners.
@@ -81,3 +82,4 @@ All 10 production readiness phases completed:
 - `docs/OPS_KEY_MANAGEMENT.md`: Key storage, backups, rotation, disaster recovery
 - `docs/CRYPTO_PAYMENT_POLICY.md`: Payment handling policies and compliance
 - `docs/STATUS_SEMANTICS.md`: Invoice status definitions and transitions
+- `docs/CANARY_DEPLOYMENT_GUIDE.md`: Phased production rollout guide (testnet → LN → BTC → XMR)

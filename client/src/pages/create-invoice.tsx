@@ -18,9 +18,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { ArrowLeft, Loader2, Info } from "lucide-react";
 import { Link } from "wouter";
 import { useToast } from "@/hooks/use-toast";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const currencies = [
   { value: "BTC", label: "Bitcoin (BTC)" },
@@ -255,6 +256,25 @@ export default function CreateInvoice() {
           </Form>
         </CardContent>
       </Card>
+
+      <Alert data-testid="alert-privacy-notice">
+        <Info className="h-4 w-4" />
+        <AlertDescription className="text-xs text-muted-foreground">
+          <strong>Privacy & Data Retention:</strong> This system is privacy-first and self-hosted. 
+          No personally identifiable information is stored. Invoices include QR codes for easy payment. 
+          Paid invoices are automatically anonymized after 90 days and permanently deleted after 365 days. 
+          See our{" "}
+          <a 
+            href="/docs/CRYPTO_PAYMENT_POLICY.md" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            payment policy
+          </a>{" "}
+          for details.
+        </AlertDescription>
+      </Alert>
     </div>
   );
 }
