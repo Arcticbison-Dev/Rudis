@@ -76,6 +76,40 @@ All 10 production readiness phases completed:
     - `rail-btc/`: Bitcoin on-chain listener.
     - `rail-xmr/`: Monero listener.
 
+## Lightning Network Implementation (Completed 2025-11-06)
+
+**rail-ln Service (Production-Ready):**
+- **Location:** `rail-ln/` directory with complete TypeScript implementation
+- **Features:**
+  - LND REST API integration with invoice creation and settlement monitoring
+  - Zod schema validation (invoiceId UUID, amountMsat 1-10M range, memo 100 char limit)
+  - Rate limiting (10 req/min per-IP tracking)
+  - Structured JSON logging (privacy-safe, no PII)
+  - Health check with LND connection status
+  - Graceful degradation when misconfigured (503 responses, no process.exit)
+  - 2-second settlement polling with callback to payments service
+  - Multi-path payment (MPP) support configurable
+  - TypeScript with strict type safety
+
+**Configuration:**
+- `rail-ln/.env.example` - Complete environment variable template
+- `rail-ln/package.json` - v2.0.0 with all dependencies (express, zod, axios)
+- `rail-ln/tsconfig.json` - TypeScript configuration (CommonJS, ES2022)
+- `rail-ln/README.md` - Comprehensive service documentation
+
+**Integration:**
+- Payments service `/api/rails/ln/settled` endpoint verified
+- `authenticateRailCallback` middleware with RAIL_AUTH_TOKEN validation
+- `paymentConfirmationSchema` matches rail-ln callback format
+- Idempotency checks for already_paid and expired invoices
+- Feature flag `ENABLE_LN` in payments service
+
+**Deployment:**
+- `DEPLOYMENT.md` - 8-step deployment guide covering LND setup, service deployment, E2E testing, monitoring, security, backup/recovery, canary rollout, and troubleshooting
+- Separate microservice architecture (runs on port 5001, independent from payments service)
+- Health checks and monitoring configured
+- Ready for Phase 0 testnet deployment
+
 ## Documentation Suite
 - `docs/E2E_TESTING_GUIDE.md`: End-to-end testing procedures for all rails
 - `docs/OBSERVABILITY.md`: Monitoring, logging, metrics, and alerting
@@ -86,3 +120,4 @@ All 10 production readiness phases completed:
 - `docs/LN_INTEGRATION_PLAN_V2.md`: Lightning Network (LND) implementation guide with TypeScript reference
 - `docs/LN_INTEGRATION_REVIEW.md`: Review of original LN integration plan with gap analysis
 - `docs/LN_IMPLEMENTATION_CHECKLIST.md`: Complete implementation and validation checklist for LN integration
+- `DEPLOYMENT.md`: Lightning Network deployment guide (LND setup, rail-ln service, E2E testing)
