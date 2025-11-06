@@ -1,0 +1,95 @@
+1) Wire-up & gate with feature flags
+	•	Add env flags in payments:
+	•	ENABLE_LN=true|false
+	•	ENABLE_BTC=true|false
+	•	ENABLE_XMR=true|false
+	•	Only call each rail when its flag is true; otherwise return 400 rail_disabled.
+	•	Keep /simulate-paid but lock it down:
+	•	SIMULATION_ENABLED=false in prod
+	•	require Authorization: Bearer ${ADMIN_SIM_TOKEN}
+	•	rate limit (e.g., 3/min) and label invoices meta.source="simulate".
+
+2) Secure the rail → payments callbacks
+	•	Require: Authorization: Bearer ${RAIL_AUTH_TOKEN} on:
+	•	POST /rails/ln/settled
+	•	POST /rails/btc/confirmed
+	•	POST /rails/xmr/confirmed
+	•	Make handlers idempotent: ignore if invoice already paid/expired.
+	•	Log only: { invoiceId, rail, event: "confirmed" } (no IPs, no tx details in logs).
+
+3) Harden the webhook to Altostratus
+	•	Keep current HMAC header: X-Altostratus-Signature.
+	•	In Altostratus, verify HMAC before updating subscription.
+	•	Add retry with backoff (you already built this—just confirm it’s used for rail-driven updates too).
+
+4) End-to-end tests (per rail)
+
+Run these exactly once per rail in testnet/regtest:
+
+Lightning (LN)
+	•	Create invoice → BOLT11 generated → pay with wallet.
+	•	Verify settle → rail-ln posts to payments → payments webhook → Altostratus marks active.
+	•	Edge cases:
+	•	Invoice expiry (can’t pay after).
+	•	MPP/partial payments (decide: accept or require full; document behavior).
+	•	Channel liquidity error (shouldn’t crash; show “retry” UX).
+
+Bitcoin (on-chain)
+	•	Ensure new address per invoice (no reuse).
+	•	Pay small amount; watch CONFIRMATIONS_REQUIRED (e.g., 2) → status flips to paid.
+	•	Edge cases:
+	•	Underpayment / overpayment (decide: accumulate to target or refund policy).
+	•	Late payment to expired invoice (mark as “late-paid” and surface manual action).
+	•	Reorg (rare): if confirmations drop, revert to pending until threshold met.
+
+Monero (XMR)
+	•	Generate subaddress per invoice; pay small amount; wait for XMR_CONFIRMATIONS_REQUIRED.
+	•	Restart the rail and confirm it re-scans and still finds the credit.
+	•	Edge cases: multiple transfers to same subaddress (should still total correctly).
+
+5) UX polish (no PII)
+	•	Billing → Crypto tab:
+	•	Show asset selector, amount in fiat + crypto, QR code, countdown to expiry.
+	•	Status chips: unpaid / pending / paid / expired / late-paid.
+	•	“View on Explorer” links built client-side only (don’t fetch from your server).
+	•	History:
+	•	Display: date, asset, amount, status, txid (optional), explorer link.
+	•	Do not show full addresses or counterparties.
+
+6) Observability (privacy-minimal)
+	•	Structured logs: { ts, level, invoiceId, rail, action }.
+	•	Metrics to track:
+	•	invoices_created_total (by asset)
+	•	invoices_paid_total (by asset)
+	•	webhook_retries_total
+	•	avg_time_to_paid_seconds
+	•	expired_invoices_total
+	•	Alerts:
+	•	Any rail healthcheck fails > 5 min
+	•	Webhook retries > N
+	•	Time-to-paid > SLA for last 50 invoices
+
+7) Ops & key management
+	•	No seeds or private keys in Replit.
+	•	LN node runs elsewhere (behind a small REST/gRPC proxy).
+	•	BTC uses xpub only.
+	•	XMR uses Wallet RPC auth; keep wallet + view/spend keys off-Replit.
+	•	Backups:
+	•	Encrypted backup of invoices DB/file and template config.
+	•	LN: channel state backups (node side).
+	•	Rotate:
+	•	RAIL_AUTH_TOKEN, ALT_WEBHOOK_SECRET, admin tokens every 90 days.
+
+8) Abuse & rate-limits
+	•	/create-invoice: 10/min per IP (in-memory is fine to start).
+	•	Block spam by requiring logged-in user context.
+	•	Optional: hCaptcha on the public invoice create form (if you expose one).
+
+9) Data retention & privacy
+	•	Auto-purge or anonymize invoices > 90 days (e.g., hash userId).
+	•	Don’t store IPs, user agents, referrers.
+	•	Keep txids optional; store only when paid/confirmed.
+
+10) Policy stubs (lightweight)
+	•	Crypto Payment Policy: assets supported, confirmations, refunds (crypto-to-crypto, minus fees), bans (sanctions, illicit use).
+	•	Status semantics doc: unpaid, pending, paid, expired, late-paid, refunded.

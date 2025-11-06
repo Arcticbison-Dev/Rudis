@@ -5,6 +5,7 @@ import { insertInvoiceSchema, insertTemplateSchema, paymentConfirmationSchema } 
 import { paymentConfirmationSchema as legacyPaymentConfirmationSchema } from "@shared/webhook-schema";
 import axios, { AxiosError } from "axios";
 import crypto from "crypto";
+import rateLimit from "express-rate-limit";
 
 // Configuration from environment variables with sensible defaults and validation
 const parseIntWithDefault = (value: string | undefined, defaultValue: number): number => {
@@ -35,6 +36,23 @@ const ENABLE_XMR = process.env.ENABLE_XMR === "true";
 // Simulation configuration  
 const SIMULATION_ENABLED = process.env.SIMULATION_ENABLED === "true";
 const ADMIN_SIM_TOKEN = process.env.ADMIN_SIM_TOKEN || "";
+
+// Rate limiters
+const createInvoiceLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10, // 10 requests per minute per IP
+  message: { error: "Too many invoice creation requests, please try again later" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const simulationLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 3, // 3 requests per minute per IP
+  message: { error: "Too many simulation requests, please try again later" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // HMAC signature generation for webhook security
 function generateWebhookSignature(payload: any): string {
@@ -343,9 +361,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create new invoice
-  app.post("/api/invoices", async (req, res) => {
+  app.post("/api/invoices", createInvoiceLimiter, async (req, res) => {
     try {
       const validatedData = insertInvoiceSchema.parse(req.body);
+      
+      // Check if the requested currency rail is enabled
+      if (validatedData.currency === "Lightning" && !ENABLE_LN) {
+        return res.status(400).json({ 
+          error: "rail_disabled",
+          message: "Lightning Network payments are currently disabled"
+        });
+      }
+      if (validatedData.currency === "BTC" && !ENABLE_BTC) {
+        return res.status(400).json({ 
+          error: "rail_disabled",
+          message: "Bitcoin on-chain payments are currently disabled"
+        });
+      }
+      if (validatedData.currency === "XMR" && !ENABLE_XMR) {
+        return res.status(400).json({ 
+          error: "rail_disabled",
+          message: "Monero payments are currently disabled"
+        });
+      }
+      
       const invoice = await storage.createInvoice(validatedData);
       console.log(`✓ Invoice created: ${invoice.id} for ${invoice.amount} ${invoice.currency}`);
       res.status(201).json(invoice);
@@ -369,14 +408,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const invoice = await storage.getInvoice(invoiceId);
       if (!invoice) {
+        console.log(JSON.stringify({ invoiceId, rail: "ln", event: "settled", status: "not_found" }));
         return res.status(404).json({ error: "Invoice not found" });
       }
 
+      // Idempotent: ignore if already paid
       if (invoice.status === "paid") {
+        console.log(JSON.stringify({ invoiceId, rail: "ln", event: "settled", status: "already_paid" }));
         return res.json({ message: "Invoice already paid" });
       }
 
+      // Idempotent: ignore if expired
       if (invoice.status === "expired" || (invoice.expiresAt && new Date(invoice.expiresAt) <= new Date())) {
+        console.log(JSON.stringify({ invoiceId, rail: "ln", event: "settled", status: "expired" }));
         return res.status(400).json({ error: "Invoice has expired" });
       }
 
@@ -388,7 +432,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
       
-      console.log(`✓ Lightning payment settled for invoice ${invoiceId} via rail-ln`);
+      console.log(JSON.stringify({ invoiceId, rail: "ln", event: "settled", status: "confirmed" }));
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       if (altWebhookUrl) {
@@ -420,14 +464,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const invoice = await storage.getInvoice(invoiceId);
       if (!invoice) {
+        console.log(JSON.stringify({ invoiceId, rail: "btc", event: "confirmed", status: "not_found" }));
         return res.status(404).json({ error: "Invoice not found" });
       }
 
+      // Idempotent: ignore if already paid
       if (invoice.status === "paid") {
+        console.log(JSON.stringify({ invoiceId, rail: "btc", event: "confirmed", status: "already_paid" }));
         return res.json({ message: "Invoice already paid" });
       }
 
+      // Idempotent: ignore if expired
       if (invoice.status === "expired" || (invoice.expiresAt && new Date(invoice.expiresAt) <= new Date())) {
+        console.log(JSON.stringify({ invoiceId, rail: "btc", event: "confirmed", status: "expired" }));
         return res.status(400).json({ error: "Invoice has expired" });
       }
 
@@ -440,7 +489,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
       
-      console.log(`✓ Bitcoin payment confirmed for invoice ${invoiceId} via rail-btc`);
+      console.log(JSON.stringify({ invoiceId, rail: "btc", event: "confirmed", status: "confirmed" }));
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       if (altWebhookUrl) {
@@ -473,14 +522,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const invoice = await storage.getInvoice(invoiceId);
       if (!invoice) {
+        console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "not_found" }));
         return res.status(404).json({ error: "Invoice not found" });
       }
 
+      // Idempotent: ignore if already paid
       if (invoice.status === "paid") {
+        console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "already_paid" }));
         return res.json({ message: "Invoice already paid" });
       }
 
+      // Idempotent: ignore if expired
       if (invoice.status === "expired" || (invoice.expiresAt && new Date(invoice.expiresAt) <= new Date())) {
+        console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "expired" }));
         return res.status(400).json({ error: "Invoice has expired" });
       }
 
@@ -493,7 +547,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
       
-      console.log(`✓ Monero payment confirmed for invoice ${invoiceId} via rail-xmr`);
+      console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "confirmed" }));
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       if (altWebhookUrl) {
@@ -805,8 +859,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Simulate payment confirmation (for testing only - remove in production)
-  app.post("/api/invoices/:id/simulate-payment", authenticateSimulation, async (req, res) => {
+  // Simulate payment confirmation (for testing only - disabled in production)
+  app.post("/api/invoices/:id/simulate-payment", simulationLimiter, authenticateSimulation, async (req, res) => {
     try {
       const invoice = await storage.getInvoice(req.params.id);
       if (!invoice) {
@@ -828,6 +882,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Invoice has expired" });
       }
 
+      // Mark invoice with simulation source before processing
+      await storage.updateInvoice(invoice.id, { paymentSource: "simulate" });
+
       // Simulate receiving a properly validated webhook from blockchain listener
       const simulatedWebhookPayload = {
         invoiceId: invoice.id,
@@ -836,7 +893,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         blockHeight: Math.floor(Math.random() * 1000000),
       };
 
-      console.log(`⚠️  SIMULATION: Simulating payment for invoice ${invoice.id}...`);
+      console.log(JSON.stringify({ invoiceId: invoice.id, action: "simulate_payment", source: "simulate" }));
 
       // Call our own webhook endpoint
       const response = await axios.post(

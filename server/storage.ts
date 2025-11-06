@@ -8,6 +8,7 @@ export interface IStorage {
   createInvoice(invoice: InsertInvoice): Promise<Invoice>;
   getInvoice(id: string): Promise<Invoice | undefined>;
   getAllInvoices(): Promise<Invoice[]>;
+  updateInvoice(id: string, updates: Partial<Invoice>): Promise<Invoice | undefined>;
   updateInvoiceStatus(id: string, status: string, paidAt?: Date): Promise<Invoice | undefined>;
   checkAndExpireInvoices(): Promise<number>;
   purgeExpiredInvoices(daysOld?: number): Promise<number>;
@@ -128,6 +129,21 @@ export class MemStorage implements IStorage {
     return Array.from(this.invoices.values()).sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
+  }
+
+  async updateInvoice(id: string, updates: Partial<Invoice>): Promise<Invoice | undefined> {
+    const invoice = this.invoices.get(id);
+    if (!invoice) return undefined;
+
+    const updatedInvoice: Invoice = {
+      ...invoice,
+      ...updates,
+      id: invoice.id, // Prevent ID from being updated
+      createdAt: invoice.createdAt, // Prevent createdAt from being updated
+    };
+
+    this.invoices.set(id, updatedInvoice);
+    return updatedInvoice;
   }
 
   async updateInvoiceStatus(
