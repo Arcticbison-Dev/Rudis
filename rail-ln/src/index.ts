@@ -17,14 +17,13 @@ const ENABLE_MPP = process.env.LN_ENABLE_MPP !== 'false';
 const PORT = parseInt(process.env.PORT || '5001', 10);
 
 // Validate critical configuration on startup
-if (!LND_URL || !MACAROON || !PAYMENTS_URL || !RAIL_TOKEN) {
-  console.error(JSON.stringify({
-    level: 'error',
-    event: 'startup_failed',
-    message: 'Missing required environment variables: LN_REST_URL, LN_MACAROON_HEX, PAYMENTS_SERVICE_URL, RAIL_AUTH_TOKEN'
-  }));
-  process.exit(1);
-}
+const missingVars: string[] = [];
+if (!LND_URL) missingVars.push('LN_REST_URL');
+if (!MACAROON) missingVars.push('LN_MACAROON_HEX');
+if (!PAYMENTS_URL) missingVars.push('PAYMENTS_SERVICE_URL');
+if (!RAIL_TOKEN) missingVars.push('RAIL_AUTH_TOKEN');
+
+const configValid = missingVars.length === 0;
 
 // ==========================================
 // SCHEMAS (Zod Validation)
@@ -104,6 +103,23 @@ function logStructured(level: string, event: string, data: any = {}) {
 
 // Health Check Endpoint
 app.get('/health', async (req: Request, res: Response) => {
+  // Report configuration error in health check
+  if (!configValid) {
+    logStructured('error', 'health_check', { 
+      status: 'misconfigured',
+      missingVars
+    });
+    return res.status(503).json({
+      status: 'misconfigured',
+      rail: 'ln',
+      timestamp: new Date().toISOString(),
+      error: 'Missing required environment variables',
+      missingVars,
+      lndConnected: false,
+      mppEnabled: ENABLE_MPP
+    });
+  }
+
   const lndConnected = await checkLndConnection();
   const status = lndConnected ? 'healthy' : 'degraded';
   
@@ -123,6 +139,18 @@ app.post(
   '/ln/create',
   rateLimit(10, 60000), // 10 requests per minute
   async (req: Request, res: Response) => {
+    // Reject requests if configuration is invalid
+    if (!configValid) {
+      logStructured('error', 'config_error', { 
+        event: 'invoice_create_rejected',
+        reason: 'missing_configuration'
+      });
+      return res.status(503).json({
+        error: 'Service misconfigured',
+        message: 'Missing required environment variables. Service cannot create invoices.'
+      });
+    }
+
     try {
       // Validate input with Zod
       const { invoiceId, amountMsat, memo } = createInvoiceSchema.parse(req.body);
@@ -302,6 +330,29 @@ async function handleInvoiceSettled(invoiceId: string, paymentHash: string) {
 // ==========================================
 
 app.listen(PORT, async () => {
+  // Check configuration validity
+  if (!configValid) {
+    console.log('╔═══════════════════════════════════════════════════════════╗');
+    console.log('║           rail-ln - Lightning Network Service            ║');
+    console.log('╠═══════════════════════════════════════════════════════════╣');
+    console.log('║ Port:        ' + PORT.toString().padEnd(46) + '║');
+    console.log('║ Status:      ✗ CONFIGURATION ERROR                       ║');
+    console.log('╚═══════════════════════════════════════════════════════════╝');
+    console.error('');
+    console.error('ERROR: Missing required environment variables:');
+    missingVars.forEach(v => console.error(`  - ${v}`));
+    console.error('');
+    console.error('Service started but will reject all requests until configured.');
+    console.error('See rail-ln/README.md or DEPLOYMENT.md for setup instructions.');
+    console.error('');
+    
+    logStructured('error', 'startup_failed', {
+      message: 'Missing required environment variables',
+      missingVars
+    });
+    return;
+  }
+
   const lndConnected = await checkLndConnection();
   
   console.log('╔═══════════════════════════════════════════════════════════╗');
