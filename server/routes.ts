@@ -22,6 +22,9 @@ const WEBHOOK_RETRY_DELAY_2 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELA
 const WEBHOOK_RETRY_DELAY_3 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_3, 9000);
 const WEBHOOK_RETRY_DELAYS = [WEBHOOK_RETRY_DELAY_1, WEBHOOK_RETRY_DELAY_2, WEBHOOK_RETRY_DELAY_3];
 const CLEANUP_EXPIRED_DAYS = Math.max(30, Math.min(90, parseIntWithDefault(process.env.CLEANUP_EXPIRED_DAYS, 90)));
+const RETENTION_PAID_DAYS = parseIntWithDefault(process.env.RETENTION_PAID_DAYS, 90);
+const RETENTION_MAX_DAYS = parseIntWithDefault(process.env.RETENTION_MAX_DAYS, 365);
+const AUTO_ANONYMIZE_ENABLED = process.env.AUTO_ANONYMIZE_ENABLED !== "false";
 const ALT_WEBHOOK_SECRET = process.env.ALT_WEBHOOK_SECRET || "";
 
 // Rail service configuration
@@ -263,6 +266,64 @@ async function cleanupOldWebhooks() {
   return deletedCount;
 }
 
+// Data retention and privacy cleanup
+async function performDataRetentionCleanup() {
+  try {
+    const results = {
+      anonymized: 0,
+      deleted: 0,
+    };
+
+    // Get all invoices
+    const allInvoices = await storage.getAllInvoices();
+    const now = new Date();
+
+    for (const invoice of allInvoices) {
+      const invoiceAge = (now.getTime() - new Date(invoice.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+
+      // Delete invoices older than RETENTION_MAX_DAYS
+      if (invoiceAge > RETENTION_MAX_DAYS) {
+        // Note: This would cascade delete related records (webhooks, transactions)
+        // For now, we just log - implement actual deletion in storage layer
+        console.log(JSON.stringify({
+          action: "data_retention",
+          invoiceId: invoice.id,
+          age_days: Math.floor(invoiceAge),
+          decision: "delete_candidate",
+        }));
+        results.deleted++;
+      }
+      // Anonymize paid invoices older than RETENTION_PAID_DAYS
+      else if (invoice.status === "paid" && invoiceAge > RETENTION_PAID_DAYS) {
+        // Hash description and payment address for privacy
+        const anonymized = await storage.updateInvoice(invoice.id, {
+          description: `[Anonymized ${Math.floor(invoiceAge)} days old]`,
+          paymentAddress: crypto.createHash('sha256').update(invoice.paymentAddress).digest('hex').substring(0, 16),
+        });
+        
+        if (anonymized) {
+          console.log(JSON.stringify({
+            action: "data_retention",
+            invoiceId: invoice.id,
+            age_days: Math.floor(invoiceAge),
+            decision: "anonymized",
+          }));
+          results.anonymized++;
+        }
+      }
+    }
+
+    if (results.anonymized > 0 || results.deleted > 0) {
+      console.log(`Data retention cleanup: ${results.anonymized} anonymized, ${results.deleted} marked for deletion`);
+    }
+
+    return results;
+  } catch (error) {
+    console.error("Error in data retention cleanup:", error);
+    return { anonymized: 0, deleted: 0 };
+  }
+}
+
 // In-memory store for invoice payloads (needed for webhook retries after server restart)
 const invoicePayloads = new Map<string, any>();
 
@@ -304,6 +365,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   setInterval(async () => {
     await cleanupOldWebhooks();
   }, 60 * 60 * 1000);
+
+  // Periodic data retention and privacy cleanup (every 24 hours)
+  if (AUTO_ANONYMIZE_ENABLED) {
+    setInterval(async () => {
+      await performDataRetentionCleanup();
+    }, 24 * 60 * 60 * 1000);
+    
+    // Run once on startup (after 1 minute delay)
+    setTimeout(async () => {
+      await performDataRetentionCleanup();
+    }, 60 * 1000);
+  }
 
   // Process any pending webhooks from previous server session on startup
   console.log("Processing any pending webhooks from previous session...");
