@@ -730,6 +730,45 @@ journalctl -u altostratus-payments -f
 # View in Replit Console tab
 ```
 
+### Test Tracking Template
+
+For each canary test, record the following information in your internal tracker:
+
+```
+Test: LN canary — Signet
+User: <tester-identifier>
+Invoice: <invoiceId>
+Created: <timestamp> (exp <timestamp>)
+Wallet: <wallet/app>
+Result: Paid | Expired | Retried
+Time-to-paid: <seconds>
+Notes: <anything odd?>
+```
+
+**Example:**
+```
+Test: LN canary — Signet
+User: Tester-1 (Alice)
+Invoice: 550e8400-e29b-41d4-a716-446655440000
+Created: 2025-11-07 14:30:00 UTC (exp 2025-11-07 14:50:00 UTC)
+Wallet: Zeus (Signet)
+Result: Paid
+Time-to-paid: 8 seconds
+Notes: Smooth flow, QR scanned instantly, status updated immediately
+```
+
+**Green-Light Requirements:**
+- Minimum 3 tests with `Result: Paid`
+- All `Time-to-paid` values <30 seconds (target: <5s)
+- No unexplained failures or status mismatches
+- Notes should indicate smooth UX
+
+**Why This Matters:**
+- Documents compliance with acceptance criteria
+- Captures wallet compatibility data
+- Identifies edge cases and anomalies
+- Provides evidence for Phase 1 approval
+
 ---
 
 **Document Version:** 2.0 (Corrected)  
