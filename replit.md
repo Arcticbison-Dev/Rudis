@@ -108,7 +108,19 @@ All 10 production readiness phases completed:
 - `DEPLOYMENT.md` - 8-step deployment guide covering LND setup, service deployment, E2E testing, monitoring, security, backup/recovery, canary rollout, and troubleshooting
 - Separate microservice architecture (runs on port 5001, independent from payments service)
 - Health checks and monitoring configured
-- Ready for Phase 0 testnet deployment
+- **Status:** Production-ready for Phase 0 testnet deployment
+
+**Canary Rollout Preparation (2025-11-07):**
+- Analyzed external canary rollout plan document
+- Identified and fixed 4 critical errors:
+  1. Environment variable naming (ALT_PAYMENTS_BASE → PAYMENTS_SERVICE_URL documented)
+  2. Added missing `/health` endpoint to payments service
+  3. Health response format documented (matches implementation)
+  4. Prometheus metrics noted as Phase 1 enhancement (logs sufficient for Phase 0)
+- Created `docs/CANARY_ROLLOUT_ANALYSIS.md` - Gap analysis and recommendations
+- Created `docs/CANARY_ROLLOUT_PLAN_CORRECTED.md` - Production-ready canary plan with corrected configuration
+- Payments service health endpoint: `GET /health` (200/503 with storage/webhook status)
+- All Priority 1 blockers resolved
 
 ## Documentation Suite
 - `docs/E2E_TESTING_GUIDE.md`: End-to-end testing procedures for all rails
@@ -120,4 +132,6 @@ All 10 production readiness phases completed:
 - `docs/LN_INTEGRATION_PLAN_V2.md`: Lightning Network (LND) implementation guide with TypeScript reference
 - `docs/LN_INTEGRATION_REVIEW.md`: Review of original LN integration plan with gap analysis
 - `docs/LN_IMPLEMENTATION_CHECKLIST.md`: Complete implementation and validation checklist for LN integration
+- `docs/CANARY_ROLLOUT_ANALYSIS.md`: Gap analysis of external canary plan with fixes (2025-11-07)
+- `docs/CANARY_ROLLOUT_PLAN_CORRECTED.md`: Production-ready canary rollout plan with corrected config (2025-11-07)
 - `DEPLOYMENT.md`: Lightning Network deployment guide (LND setup, rail-ln service, E2E testing)
