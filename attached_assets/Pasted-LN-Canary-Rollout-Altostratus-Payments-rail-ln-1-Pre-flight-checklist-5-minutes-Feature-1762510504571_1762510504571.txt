@@ -1,0 +1,87 @@
+LN Canary Rollout (Altostratus → Payments → rail-ln)
+
+1) Pre-flight checklist (5 minutes)
+	•	Feature flag: in payments Secrets
+	•	ENABLE_LN=true
+	•	LN_SERVICE_URL=https://<rail-ln>.replit.app
+	•	RAIL_AUTH_TOKEN=<same as rail-ln>
+	•	Rail auth: rail-ln Secrets
+	•	ALT_PAYMENTS_BASE=https://<payments>.replit.app
+	•	RAIL_AUTH_TOKEN=<same as above>
+	•	Webhook to main app (already set):
+	•	ALT_WEBHOOK_URL=https://<altostratus>.replit.app/api/payments/webhook
+	•	ALT_WEBHOOK_SECRET=<long random>
+	•	Expiry:
+	•	LN_INVOICE_EXPIRY_SEC=1200 (20 min)
+	•	Disable simulator in prod:
+	•	SIMULATION_ENABLED=false (payments)
+	•	If you keep it for QA, require ADMIN_SIM_TOKEN and IP allowlist.
+
+2) Health checks (2 minutes)
+	•	Open:
+	•	GET <payments>/health → { ok: true }
+	•	GET <rail-ln>/health → { ok: true, rail: "ln" }
+	•	In Altostratus UI, ensure the Crypto → Lightning option is visible when feature flag is on.
+
+3) Tester setup (choose 1–3 people)
+	•	Ask each tester to install a Lightning wallet that supports Signet/Testnet (e.g., Zeus connected to a Signet node).
+	•	Provide them one plan to buy (e.g., “Pro — $5 Signet/Test”).
+	•	Make sure testers know:
+	•	pay within 20 minutes of invoice creation (expiry),
+	•	if an invoice expires, click New Invoice and try again.
+
+4) Canary test flow (per tester)
+	1.	In Altostratus: Billing → Crypto → Lightning (LN) → create invoice for test plan.
+	2.	Payments calls rail-ln → returns BOLT11 + expiresAt.
+	3.	UI shows QR + BOLT11 + countdown (20:00 → 0:00).
+	•	Tester scans and pays.
+	4.	rail-ln detects settlement → POST to payments /rails/ln/settled (Bearer RAIL_AUTH_TOKEN).
+	5.	payments marks invoice paid → sends HMAC webhook to Altostratus (X-Altostratus-Signature).
+	6.	Altostratus flips subscription to Active and shows Paid in history.
+
+5) Acceptance checklist (pass/fail for each tester)
+	•	BOLT11 generated instantly (≤3s).
+	•	Countdown visible; expires at expected time.
+	•	Payment settles; status becomes Paid within ≤30s of wallet success.
+	•	Subscription immediately toggles to Active.
+	•	Payment history shows row with date, plan, amount, status (no PII).
+	•	No logs contain IPs, wallet info, or user agents—only { invoiceId, rail, action }.
+
+6) Edge-case tests (quick)
+	•	Expired invoice: wait past 20 min; attempt pay (should fail; UI offers new invoice).
+	•	Duplicate callback: call /rails/ln/settled twice (should return already_paid, no double-credit).
+	•	Altostratus temporarily down: stop main app, pay invoice, confirm payments retries webhook until 200 OK.
+	•	Over/under payment: LN invoices require exact amount; verify wallet prevents wrong amounts.
+
+7) Logs & metrics to watch (during canary window)
+	•	invoices_created_total{asset="LN"} increases when testers create.
+	•	invoices_paid_total{asset="LN"} increases after settlement.
+	•	webhook_retries_total stays near zero; bursts indicate network trouble.
+	•	avg_time_to_paid_seconds{asset="LN"} median under a few minutes.
+	•	No PII in logs—scan randomly to confirm.
+
+8) Common issues & quick fixes
+	•	BOLT11 not generating:
+	•	Check rail-ln env: LN_REST_URL, LN_MACAROON_HEX, node reachable (TLS ok).
+	•	rail-ln logs should show a 200 from /v1/invoices.
+	•	Paid but status not changing:
+	•	rail-ln → payments auth mismatch → verify RAIL_AUTH_TOKEN matches on both sides.
+	•	payments → Altostratus webhook HMAC mismatch → recheck ALT_WEBHOOK_SECRET and signature header.
+	•	Invoice expires too fast:
+	•	Increase LN_INVOICE_EXPIRY_SEC (e.g., 1800 = 30 min).
+	•	Webhook loop or duplicate:
+	•	Ensure payments only sends one webhook per paid transition; callback is idempotent.
+
+9) Rollback plan (1 minute)
+
+If anything looks off for your testers:
+	•	Set ENABLE_LN=false in payments (feature off).
+	•	Keep rail-ln running; you can still test privately via direct calls.
+	•	Fix config and re-enable.
+
+10) Green-light criteria to move beyond canary
+	•	3+ successful canary payments over 48–72 hours.
+	•	Zero PII in logs.
+	•	Webhook retries < 1% of events.
+	•	No unexplained status mismatches.
+	•	Testers report clear, smooth UX.
