@@ -122,6 +122,16 @@ All 10 production readiness phases completed:
 - Payments service health endpoint: `GET /health` (200/503 with storage/webhook status)
 - All Priority 1 blockers resolved
 
+**Security Hardening (2025-11-07):**
+- Fixed critical webhook signing vulnerability (architect-identified):
+  - Added startup validation requiring ALT_WEBHOOK_SECRET when ALTOSTRATUS_WEBHOOK_URL configured
+  - Updated generateWebhookSignature() to fail-safe (throws error if secret missing)
+  - Removed conditional signature header - webhooks now always signed
+  - Server refuses to start if webhooks configured without signing secret
+- Verified inbound rail callback authentication (Bearer tokens with RAIL_AUTH_TOKEN)
+- Architect confirmed: No critical security gaps, Phase 0 ready
+- Test tracking template added to canary rollout documentation
+
 ## Documentation Suite
 - `docs/E2E_TESTING_GUIDE.md`: End-to-end testing procedures for all rails
 - `docs/OBSERVABILITY.md`: Monitoring, logging, metrics, and alerting
