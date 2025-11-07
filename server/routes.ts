@@ -59,9 +59,9 @@ const simulationLimiter = rateLimit({
 
 // HMAC signature generation for webhook security
 function generateWebhookSignature(payload: any): string {
-  if (!ALT_WEBHOOK_SECRET) {
-    console.warn("ALT_WEBHOOK_SECRET not configured - webhooks will not be signed");
-    return "";
+  if (!ALT_WEBHOOK_SECRET || ALT_WEBHOOK_SECRET.length === 0) {
+    // This should never happen due to startup validation, but defense in depth
+    throw new Error("Cannot generate webhook signature: ALT_WEBHOOK_SECRET not configured");
   }
   const payloadString = JSON.stringify(payload);
   return crypto
@@ -180,7 +180,7 @@ async function attemptWebhookDelivery(
       headers: {
         "Content-Type": "application/json",
         "User-Agent": "Altostratus-Payments/1.0",
-        ...(signature && { "X-Altostratus-Signature": signature }),
+        "X-Altostratus-Signature": signature,
       },
       validateStatus: (status) => status < 500, // Don't throw on 4xx
     });
@@ -376,6 +376,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.error("║ Set ADMIN_SIM_TOKEN or disable simulation                ║");
     console.error("╚═══════════════════════════════════════════════════════════╝");
     throw new Error("ADMIN_SIM_TOKEN required when SIMULATION_ENABLED=true");
+  }
+  
+  // Validate webhook security configuration
+  const webhookUrlConfigured = process.env.ALTOSTRATUS_WEBHOOK_URL && process.env.ALTOSTRATUS_WEBHOOK_URL.length > 0;
+  if (webhookUrlConfigured && (!ALT_WEBHOOK_SECRET || ALT_WEBHOOK_SECRET.length === 0)) {
+    console.error("╔═══════════════════════════════════════════════════════════╗");
+    console.error("║ FATAL: ALTOSTRATUS_WEBHOOK_URL set but ALT_WEBHOOK_SECRET║");
+    console.error("║        not configured. Webhooks MUST be signed for       ║");
+    console.error("║        security. Set ALT_WEBHOOK_SECRET or remove         ║");
+    console.error("║        ALTOSTRATUS_WEBHOOK_URL from environment.          ║");
+    console.error("╚═══════════════════════════════════════════════════════════╝");
+    throw new Error("ALT_WEBHOOK_SECRET required when ALTOSTRATUS_WEBHOOK_URL is configured");
   }
   
   // Log configuration status
