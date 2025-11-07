@@ -438,6 +438,49 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await processWebhookQueue(invoicePayloads);
   }, 1000);
 
+  // Health check endpoint
+  app.get("/health", async (req, res) => {
+    const timestamp = new Date().toISOString();
+    let storageStatus = "operational";
+    let webhookStatus = "operational";
+    let pendingCount = 0;
+    
+    try {
+      // Lightweight storage check - just count pending webhooks (bounded query)
+      // This is O(n) where n = pending webhooks, not O(all invoices)
+      const pendingWebhooks = await storage.getPendingWebhooks();
+      pendingCount = pendingWebhooks.length;
+      webhookStatus = pendingCount < 100 ? "operational" : "queue_full";
+    } catch (error: any) {
+      // If we can't even query webhooks, storage is likely down
+      storageStatus = "error";
+      webhookStatus = "unknown";
+    }
+    
+    const isHealthy = storageStatus === "operational" && webhookStatus === "operational";
+    const status = isHealthy ? "healthy" : "degraded";
+    
+    const response: any = {
+      status,
+      timestamp,
+      version: "1.0.0",
+      storage: storageStatus,
+      webhooks: webhookStatus,
+    };
+    
+    // Add issues and details if degraded
+    if (!isHealthy) {
+      response.issues = [];
+      if (storageStatus === "error") response.issues.push("storage_error");
+      if (webhookStatus === "queue_full") {
+        response.issues.push("webhook_queue_full");
+        response.pendingWebhookCount = pendingCount;
+      }
+    }
+    
+    res.status(isHealthy ? 200 : 503).json(response);
+  });
+
   // Get all invoices
   app.get("/api/invoices", async (req, res) => {
     try {
