@@ -545,7 +545,64 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
+      // Create invoice first (will have placeholder address)
       const invoice = await storage.createInvoice(validatedData);
+      
+      // For BTC invoices, get real address from rail-btc service
+      if (validatedData.currency === "BTC" && ENABLE_BTC) {
+        try {
+          const btcResponse = await axios.post(
+            `${BTC_SERVICE_URL}/create`,
+            {
+              invoiceId: invoice.id,
+              amountSats: invoice.amount,
+            },
+            {
+              timeout: 10000,
+            }
+          );
+
+          // Validate response schema
+          if (!btcResponse.data || !btcResponse.data.address) {
+            console.error(`Invalid response from rail-btc for invoice ${invoice.id}:`, btcResponse.data);
+            return res.status(500).json({ 
+              error: "Bitcoin address derivation failed",
+              details: "Invalid response from Bitcoin rail service"
+            });
+          }
+
+          // Validate address format (basic check for native segwit prefix)
+          const address = btcResponse.data.address;
+          const isValidFormat = address.startsWith("bc1") || address.startsWith("tb1");
+          
+          if (!isValidFormat) {
+            console.error(`Invalid Bitcoin address format for invoice ${invoice.id}: ${address}`);
+            // Don't delete invoice - just return error
+            return res.status(500).json({ 
+              error: "Bitcoin address derivation failed",
+              details: "Invalid address format received (expected native segwit bc1/tb1)"
+            });
+          }
+
+          // Update invoice with real Bitcoin address
+          await storage.updateInvoice(invoice.id, {
+            paymentAddress: address,
+          });
+          invoice.paymentAddress = address;
+          
+          console.log(`✓ Bitcoin address derived and assigned: ${address}`);
+        } catch (error: any) {
+          console.error(`CRITICAL: Failed to derive Bitcoin address for invoice ${invoice.id}:`, error.message);
+          
+          // Return error - invoice exists but has no valid payment address
+          return res.status(500).json({ 
+            error: "Bitcoin address derivation failed",
+            details: error.message,
+            hint: "Check if rail-btc service is running and configured correctly"
+          });
+        }
+      }
+      
       console.log(`✓ Invoice created: ${invoice.id} for ${invoice.amount} ${invoice.currency}`);
       res.status(201).json(invoice);
     } catch (error: any) {
