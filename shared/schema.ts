@@ -89,3 +89,50 @@ export const paymentConfirmationSchema = z.object({
   confirmations: z.number().int().nonnegative(),
   blockHeight: z.number().int().positive().optional(),
 });
+
+// Bitcoin address derivations - persistent tracking of derived addresses
+export const btcAddressDerivations = pgTable("btc_address_derivations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id").notNull().unique(),
+  address: text("address").notNull(),
+  derivationIndex: varchar("derivation_index", { length: 20 }).notNull(),
+  derivationPath: text("derivation_path").notNull(),
+  amountSats: varchar("amount_sats", { length: 20 }).notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export type BtcAddressDerivation = typeof btcAddressDerivations.$inferSelect;
+export type InsertBtcAddressDerivation = {
+  invoiceId: string;
+  address: string;
+  derivationIndex: number;
+  derivationPath: string;
+  amountSats: number;
+};
+
+// Bitcoin payment states - state machine tracking for payment confirmations
+export const btcPaymentStates = pgTable("btc_payment_states", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  invoiceId: varchar("invoice_id").notNull().unique(),
+  address: text("address").notNull(),
+  state: varchar("state", { length: 20 }).notNull(), // unseen, pending, confirmed, settled
+  txid: text("txid"),
+  confirmations: varchar("confirmations", { length: 10 }).default("0"),
+  blockHeight: varchar("block_height", { length: 20 }),
+  amountSats: varchar("amount_sats", { length: 20 }),
+  lastChecked: timestamp("last_checked"),
+  paidAt: timestamp("paid_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export type BtcPaymentState = typeof btcPaymentStates.$inferSelect;
+export type InsertBtcPaymentState = {
+  invoiceId: string;
+  address: string;
+  state: "unseen" | "pending" | "confirmed" | "settled";
+  txid?: string;
+  confirmations?: number;
+  blockHeight?: number;
+  amountSats?: number;
+};
