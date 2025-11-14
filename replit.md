@@ -132,6 +132,17 @@ All 10 production readiness phases completed:
 - Architect confirmed: No critical security gaps, Phase 0 ready
 - Test tracking template added to canary rollout documentation
 
+**Rail-BTC Security Fix (2025-11-14):**
+- Fixed critical vulnerability: `/create` endpoint was publicly accessible
+  - Added `authenticatePaymentsService` middleware requiring RAIL_AUTH_TOKEN
+  - Applied to `POST /create` endpoint to prevent unauthorized address generation
+  - Payments service now sends `Authorization: Bearer ${RAIL_AUTH_TOKEN}` header
+- Security audit completed: All three requirements verified
+  1. ✅ Payments service has rate limiting (10/min per IP on invoice creation)
+  2. ✅ Rail-BTC requires authentication from payments service only
+  3. ✅ No public endpoint generates unlimited BTC addresses without auth
+- Documentation: `docs/RAIL_SECURITY_AUDIT_2025-11-14.md`
+
 ## Documentation Suite
 - `docs/E2E_TESTING_GUIDE.md`: End-to-end testing procedures for all rails
 - `docs/OBSERVABILITY.md`: Monitoring, logging, metrics, and alerting

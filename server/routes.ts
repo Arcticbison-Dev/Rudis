@@ -562,6 +562,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
             },
             {
               timeout: 10000,
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${RAIL_AUTH_TOKEN}`,
+              },
             }
           );
 
