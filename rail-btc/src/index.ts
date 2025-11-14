@@ -115,7 +115,7 @@ async function checkAddress(address: string): Promise<{
         let confirmations = 0;
         let blockHeight: number | undefined;
         
-        if (tx.status && tx.status.confirmed) {
+        if (tx.status && tx.status.confirmed && typeof tx.status.block_height === 'number') {
           blockHeight = tx.status.block_height;
           // Get current block height
           const tipResponse = await axios.get(`${MEMPOOL_API_BASE}/blocks/tip/height`, {
@@ -136,7 +136,7 @@ async function checkAddress(address: string): Promise<{
 
     return {}; // No relevant transactions
   } catch (error: any) {
-    console.error(`Error checking address ${truncateAddress(address)}:`, error.message);
+    // Silent error - monitoring will retry on next interval
     return {};
   }
 }
@@ -175,30 +175,13 @@ async function monitorAddresses() {
         // No transaction found
         // If state was previously pending/confirmed, this might indicate a reorg
         if (currentState === "pending" || currentState === "confirmed") {
-          console.warn(JSON.stringify({
-            invoiceId,
-            address: truncateAddress(address),
-            event: "transaction_disappeared",
-            previousState: currentState,
-            previousTxid: truncateTxid(previousTxid),
-          }));
-          
-          // Transition back to unseen
+          // Transition back to unseen (silent - operational detail)
           await storage.updatePaymentState(invoiceId, {
             state: "unseen",
             txid: null,
             confirmations: "0",
             blockHeight: null,
           });
-
-          console.log(JSON.stringify({
-            invoiceId,
-            address: truncateAddress(address),
-            event: "state_transition",
-            from: currentState,
-            to: "unseen",
-            reason: "transaction_disappeared",
-          }));
         }
         continue;
       }
@@ -211,16 +194,7 @@ async function monitorAddresses() {
 
       // RBF Detection: Check if txid changed
       if (previousTxid && previousTxid !== txid) {
-        console.warn(JSON.stringify({
-          invoiceId,
-          address: truncateAddress(address),
-          event: "rbf_detected",
-          oldTxid: truncateTxid(previousTxid),
-          newTxid: truncateTxid(txid),
-          previousState: currentState,
-        }));
-
-        // Reset to pending state with new txid
+        // Reset to pending state with new txid (silent - operational detail)
         await storage.updatePaymentState(invoiceId, {
           state: "pending",
           txid,
@@ -228,17 +202,6 @@ async function monitorAddresses() {
           blockHeight: blockHeight?.toString() || null,
           amountSats: amountSats.toString(),
         });
-
-        console.log(JSON.stringify({
-          invoiceId,
-          address: truncateAddress(address),
-          event: "state_transition",
-          from: currentState,
-          to: "pending",
-          reason: "rbf_detected",
-          txid: truncateTxid(txid),
-          confirmations,
-        }));
 
         continue;
       }
@@ -249,16 +212,7 @@ async function monitorAddresses() {
 
       // Validate amount matches invoice (critical security check)
       if (amountSats !== expectedAmountSats) {
-        console.error(JSON.stringify({
-          invoiceId,
-          address: truncateAddress(address),
-          txid: truncateTxid(txid),
-          event: "amount_mismatch",
-          expected: expectedAmountSats,
-          received: amountSats,
-          state: currentState,
-        }));
-        // Don't transition state if amount doesn't match
+        // Don't transition state if amount doesn't match (silent - security check)
         continue;
       }
 
@@ -266,33 +220,12 @@ async function monitorAddresses() {
 
       // Handle reorg for settled states
       if (currentState === "settled" && confirmations < BTC_CONFIRMATIONS_REQUIRED) {
-        console.error(JSON.stringify({
-          invoiceId,
-          address: truncateAddress(address),
-          txid: truncateTxid(txid),
-          event: "REORG_DETECTED",
-          confirmations,
-          threshold: BTC_CONFIRMATIONS_REQUIRED,
-          severity: "CRITICAL",
-        }));
-
-        // Transition settled -> pending
+        // Transition settled -> pending (silent - will retry settlement later)
         await storage.updatePaymentState(invoiceId, {
           state: "pending",
           confirmations: confirmations.toString(),
           paidAt: null,
         });
-
-        console.log(JSON.stringify({
-          invoiceId,
-          address: truncateAddress(address),
-          event: "state_transition",
-          from: "settled",
-          to: "pending",
-          reason: "reorg_detected",
-          txid: truncateTxid(txid),
-          confirmations,
-        }));
 
         // Call reversal webhook to notify payments service
         try {
@@ -316,23 +249,21 @@ async function monitorAddresses() {
           if (reversalResponse.status === 200) {
             console.log(JSON.stringify({
               invoiceId,
-              event: "reversal_webhook_success",
-              txid: truncateTxid(txid),
+              rail: "btc",
+              event: "callback_sent"
             }));
           } else {
             console.error(JSON.stringify({
               invoiceId,
-              event: "reversal_webhook_failed",
-              status: reversalResponse.status,
-              txid: truncateTxid(txid),
+              rail: "btc",
+              event: "callback_failed"
             }));
           }
         } catch (error: any) {
           console.error(JSON.stringify({
             invoiceId,
-            event: "reversal_webhook_error",
-            error: error.message,
-            txid: truncateTxid(txid),
+            rail: "btc",
+            event: "callback_failed"
           }));
         }
 
@@ -389,14 +320,7 @@ async function monitorAddresses() {
           // Re-check confirmations before finalizing (reorg protection)
           const recheckResult = await checkAddress(address);
           if (!recheckResult.txid || (recheckResult.confirmations || 0) < BTC_CONFIRMATIONS_REQUIRED) {
-            console.warn(JSON.stringify({
-              invoiceId,
-              event: "reorg_detected_before_settlement",
-              previousConfirmations: confirmations,
-              currentConfirmations: recheckResult.confirmations || 0,
-            }));
-            
-            // Update confirmations and don't settle
+            // Update confirmations and don't settle (silent - will retry next interval)
             await storage.updatePaymentState(invoiceId, {
               confirmations: (recheckResult.confirmations || 0).toString(),
             });
@@ -425,7 +349,7 @@ async function monitorAddresses() {
             // Transition to settled
             await storage.updatePaymentState(invoiceId, {
               state: "settled",
-              confirmations: recheckResult.confirmations.toString(),
+              confirmations: (recheckResult.confirmations || 0).toString(),
               paidAt: new Date(),
             });
 
@@ -434,8 +358,6 @@ async function monitorAddresses() {
               rail: "btc",
               event: "callback_sent"
             }));
-
-            console.log(`✓ Payment confirmed and settled for invoice ${invoiceId}`);
           } else {
             console.error(JSON.stringify({
               invoiceId,
@@ -453,7 +375,7 @@ async function monitorAddresses() {
       }
     }
   } catch (error: any) {
-    console.error("Error in monitorAddresses:", error.message);
+    // Silent error - monitoring will retry on next interval
   }
 }
 
@@ -467,13 +389,13 @@ function startMonitoring() {
 
   // Initial check
   monitorAddresses().catch(err => {
-    console.error("Error in initial monitoring:", err);
+    // Silent error - will retry on interval
   });
 
   // Set up interval
   monitoringInterval = setInterval(() => {
     monitorAddresses().catch(err => {
-      console.error("Error in monitoring interval:", err);
+      // Silent error - will retry on next interval
     });
   }, POLLING_INTERVAL_MS);
 
@@ -533,8 +455,8 @@ app.post("/create", async (req: Request, res: Response) => {
         details: error.errors 
       });
     }
-    console.error("Error creating Bitcoin address:", error);
-    res.status(500).json({ error: error.message });
+    // Silent error - endpoint returns 500 status to caller
+    res.status(500).json({ error: "Failed to create address" });
   }
 });
 

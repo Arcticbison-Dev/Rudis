@@ -225,11 +225,7 @@ async function attemptWebhookDelivery(
         retryAfter,
       });
 
-      if (shouldRetry) {
-        console.log(`Webhook attempt ${currentAttempt} failed with status ${response.status}, will retry as attempt ${nextAttempt} after ${nextRetryDelay}ms`);
-      } else {
-        console.error(`✗ Webhook failed permanently after ${currentAttempt} attempts (max: ${WEBHOOK_MAX_ATTEMPTS})`);
-      }
+      // Silent - webhook status tracked in database
       return false;
     }
   } catch (error: any) {
@@ -252,11 +248,7 @@ async function attemptWebhookDelivery(
       retryAfter,
     });
 
-    if (shouldRetry) {
-      console.log(`Webhook attempt ${currentAttempt} failed: ${errorMessage}, will retry as attempt ${nextAttempt} after ${nextRetryDelay}ms`);
-    } else {
-      console.error(`✗ Webhook failed permanently after ${currentAttempt} attempts (max: ${WEBHOOK_MAX_ATTEMPTS}): ${errorMessage}`);
-    }
+    // Silent - webhook status tracked in database
     return false;
   }
 }
@@ -362,7 +354,7 @@ async function performDataRetentionCleanup() {
 
     return results;
   } catch (error) {
-    console.error("Error in data retention cleanup:", error);
+    // Silent error - cleanup will retry on next interval
     return { anonymized: 0, deleted: 0 };
   }
 }
@@ -511,8 +503,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const invoices = await storage.getAllInvoices();
       res.json(invoices);
     } catch (error: any) {
-      console.error("Error fetching invoices:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns 500 to client
+      res.status(500).json({ error: "Failed to fetch invoices" });
     }
   });
 
@@ -526,8 +518,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       res.json(invoice);
     } catch (error: any) {
-      console.error("Error fetching invoice:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns 500 to client
+      res.status(500).json({ error: "Failed to fetch invoice" });
     }
   });
 
@@ -575,7 +567,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           // Validate response schema
           if (!btcResponse.data || !btcResponse.data.address) {
-            console.error(`Invalid response from rail-btc for invoice ${invoice.id}:`, btcResponse.data);
+            // Silent error - invalid response from rail service
             return res.status(500).json({ 
               error: "Bitcoin address derivation failed",
               details: "Invalid response from Bitcoin rail service"
@@ -587,12 +579,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const isValidFormat = address.startsWith("bc1") || address.startsWith("tb1");
           
           if (!isValidFormat) {
-            console.error(JSON.stringify({
-              invoiceId: invoice.id,
-              rail: "btc",
-              event: "address_validation_failed",
-              addressPrefix: address.substring(0, 4)
-            }));
+            // Silent error - invalid address format (operational detail)
             // Don't delete invoice - just return error
             return res.status(500).json({ 
               error: "Bitcoin address derivation failed",
@@ -612,12 +599,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             event: "address_created"
           }));
         } catch (error: any) {
-          console.error(`CRITICAL: Failed to derive Bitcoin address for invoice ${invoice.id}:`, error.message);
+          // Silent error - address derivation failed (operational detail)
           
           // Return error - invoice exists but has no valid payment address
           return res.status(500).json({ 
             error: "Bitcoin address derivation failed",
-            details: error.message,
+            details: "Address derivation failed",
             hint: "Check if rail-btc service is running and configured correctly"
           });
         }
@@ -627,14 +614,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(invoice);
     } catch (error: any) {
       if (error.name === "ZodError") {
-        console.error("Invalid invoice data:", error.errors);
+        // Silent error - validation failed (returned to client)
         return res.status(400).json({ 
           error: "Invalid invoice data", 
           details: error.errors 
         });
       }
-      console.error("Error creating invoice:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - invoice creation failed (operational detail)
+      res.status(500).json({ error: "Failed to create invoice" });
     }
   });
 
@@ -690,8 +677,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true });
     } catch (error: any) {
-      console.error("Error processing Lightning settlement:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to rail service
+      res.status(500).json({ error: "Lightning settlement processing failed" });
     }
   });
 
@@ -748,8 +735,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true });
     } catch (error: any) {
-      console.error("Error processing Bitcoin confirmation:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to rail service
+      res.status(500).json({ error: "Bitcoin confirmation processing failed" });
     }
   });
 
@@ -806,8 +793,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true });
     } catch (error: any) {
-      console.error("Error processing Monero confirmation:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to rail service
+      res.status(500).json({ error: "Monero confirmation processing failed" });
     }
   });
 
@@ -912,14 +899,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       if (error.name === "ZodError") {
-        console.error("Invalid payment confirmation payload:", error.errors);
+        // Silent error - validation failed (returned to client)
         return res.status(400).json({ 
           error: "Invalid payment confirmation data", 
           details: error.errors 
         });
       }
-      console.error("Error processing payment confirmation:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - payment processing failed (operational detail)
+      res.status(500).json({ error: "Payment confirmation failed" });
     }
   });
 
@@ -929,8 +916,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const logs = await storage.getWebhookLogsByInvoice(req.params.id);
       res.json(logs);
     } catch (error: any) {
-      console.error("Error fetching webhook logs:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns 500 to client
+      res.status(500).json({ error: "Failed to fetch webhook logs" });
     }
   });
 
@@ -940,8 +927,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const transactions = await storage.getPaymentTransactionsByInvoice(req.params.id);
       res.json(transactions);
     } catch (error: any) {
-      console.error("Error fetching payment transactions:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns 500 to client
+      res.status(500).json({ error: "Failed to fetch payment transactions" });
     }
   });
 
@@ -956,8 +943,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: `${expiredCount} invoice(s) expired`,
       });
     } catch (error: any) {
-      console.error("Error checking expired invoices:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to caller
+      res.status(500).json({ error: "Failed to check expired invoices" });
     }
   });
 
@@ -981,8 +968,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: `${purgedCount} expired invoice(s) purged`,
       });
     } catch (error: any) {
-      console.error("Error purging expired invoices:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to caller
+      res.status(500).json({ error: "Failed to purge expired invoices" });
     }
   });
 
@@ -997,8 +984,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: `Webhook queue processed, ${pendingCount} still pending`,
       });
     } catch (error: any) {
-      console.error("Error processing webhook queue:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to caller
+      res.status(500).json({ error: "Failed to process webhook queue" });
     }
   });
 
@@ -1012,8 +999,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: `${deletedCount} old failed webhook(s) cleaned up`,
       });
     } catch (error: any) {
-      console.error("Error cleaning up webhooks:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to caller
+      res.status(500).json({ error: "Failed to clean up webhooks" });
     }
   });
 
@@ -1023,8 +1010,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const templates = await storage.getAllTemplates();
       res.json(templates);
     } catch (error: any) {
-      console.error("Error fetching templates:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns 500 to client
+      res.status(500).json({ error: "Failed to fetch templates" });
     }
   });
 
@@ -1036,8 +1023,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       res.json(template);
     } catch (error: any) {
-      console.error("Error fetching template:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns 500 to client
+      res.status(500).json({ error: "Failed to fetch template" });
     }
   });
 
@@ -1049,14 +1036,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(template);
     } catch (error: any) {
       if (error.name === "ZodError") {
-        console.error("Invalid template data:", error.errors);
+        // Silent error - validation failed (returned to client)
         return res.status(400).json({ 
           error: "Invalid template data", 
           details: error.errors 
         });
       }
-      console.error("Error creating template:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to client
+      res.status(500).json({ error: "Failed to create template" });
     }
   });
 
@@ -1071,14 +1058,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(template);
     } catch (error: any) {
       if (error.name === "ZodError") {
-        console.error("Invalid template data:", error.errors);
+        // Silent error - validation failed (returned to client)
         return res.status(400).json({ 
           error: "Invalid template data", 
           details: error.errors 
         });
       }
-      console.error("Error updating template:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to client
+      res.status(500).json({ error: "Failed to update template" });
     }
   });
 
@@ -1091,8 +1078,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.log(`✓ Template deleted: ${req.params.id}`);
       res.json({ success: true });
     } catch (error: any) {
-      console.error("Error deleting template:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to client
+      res.status(500).json({ error: "Failed to delete template" });
     }
   });
 
@@ -1148,8 +1135,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         result: response.data,
       });
     } catch (error: any) {
-      console.error("Error simulating payment:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to client
+      res.status(500).json({ error: "Failed to simulate payment" });
     }
   });
 
@@ -1210,8 +1197,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         invoice: anonymized,
       });
     } catch (error: any) {
-      console.error("Error anonymizing invoice:", error);
-      res.status(500).json({ error: error.message });
+      // Silent error - endpoint returns error to client
+      res.status(500).json({ error: "Failed to anonymize invoice" });
     }
   });
 
