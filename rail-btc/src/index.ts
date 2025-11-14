@@ -33,6 +33,17 @@ const createAddressSchema = z.object({
   amountSats: z.number().int().positive(),
 });
 
+// Privacy helpers - truncate addresses and txids for logging
+function truncateAddress(address: string | null | undefined): string {
+  if (!address || address.length <= 16) return address || "null";
+  return `${address.substring(0, 8)}...${address.substring(address.length - 8)}`;
+}
+
+function truncateTxid(txid: string | null | undefined): string {
+  if (!txid || txid.length <= 16) return txid || "null";
+  return `${txid.substring(0, 8)}...${txid.substring(txid.length - 8)}`;
+}
+
 // Get Bitcoin network configuration
 function getBitcoinNetwork(): bitcoin.Network {
   return BTC_NETWORK === "mainnet" ? bitcoin.networks.bitcoin : bitcoin.networks.testnet;
@@ -125,7 +136,7 @@ async function checkAddress(address: string): Promise<{
 
     return {}; // No relevant transactions
   } catch (error: any) {
-    console.error(`Error checking address ${address}:`, error.message);
+    console.error(`Error checking address ${truncateAddress(address)}:`, error.message);
     return {};
   }
 }
@@ -166,10 +177,10 @@ async function monitorAddresses() {
         if (currentState === "pending" || currentState === "confirmed") {
           console.warn(JSON.stringify({
             invoiceId,
-            address,
+            address: truncateAddress(address),
             event: "transaction_disappeared",
             previousState: currentState,
-            previousTxid,
+            previousTxid: truncateTxid(previousTxid),
           }));
           
           // Transition back to unseen
@@ -182,7 +193,7 @@ async function monitorAddresses() {
 
           console.log(JSON.stringify({
             invoiceId,
-            address,
+            address: truncateAddress(address),
             event: "state_transition",
             from: currentState,
             to: "unseen",
@@ -202,10 +213,10 @@ async function monitorAddresses() {
       if (previousTxid && previousTxid !== txid) {
         console.warn(JSON.stringify({
           invoiceId,
-          address,
+          address: truncateAddress(address),
           event: "rbf_detected",
-          oldTxid: previousTxid,
-          newTxid: txid,
+          oldTxid: truncateTxid(previousTxid),
+          newTxid: truncateTxid(txid),
           previousState: currentState,
         }));
 
@@ -220,12 +231,12 @@ async function monitorAddresses() {
 
         console.log(JSON.stringify({
           invoiceId,
-          address,
+          address: truncateAddress(address),
           event: "state_transition",
           from: currentState,
           to: "pending",
           reason: "rbf_detected",
-          txid,
+          txid: truncateTxid(txid),
           confirmations,
         }));
 
@@ -240,8 +251,8 @@ async function monitorAddresses() {
       if (amountSats !== expectedAmountSats) {
         console.error(JSON.stringify({
           invoiceId,
-          address,
-          txid,
+          address: truncateAddress(address),
+          txid: truncateTxid(txid),
           event: "amount_mismatch",
           expected: expectedAmountSats,
           received: amountSats,
@@ -257,8 +268,8 @@ async function monitorAddresses() {
       if (currentState === "settled" && confirmations < BTC_CONFIRMATIONS_REQUIRED) {
         console.error(JSON.stringify({
           invoiceId,
-          address,
-          txid,
+          address: truncateAddress(address),
+          txid: truncateTxid(txid),
           event: "REORG_DETECTED",
           confirmations,
           threshold: BTC_CONFIRMATIONS_REQUIRED,
@@ -274,12 +285,12 @@ async function monitorAddresses() {
 
         console.log(JSON.stringify({
           invoiceId,
-          address,
+          address: truncateAddress(address),
           event: "state_transition",
           from: "settled",
           to: "pending",
           reason: "reorg_detected",
-          txid,
+          txid: truncateTxid(txid),
           confirmations,
         }));
 
@@ -306,14 +317,14 @@ async function monitorAddresses() {
             console.log(JSON.stringify({
               invoiceId,
               event: "reversal_webhook_success",
-              txid,
+              txid: truncateTxid(txid),
             }));
           } else {
             console.error(JSON.stringify({
               invoiceId,
               event: "reversal_webhook_failed",
               status: reversalResponse.status,
-              txid,
+              txid: truncateTxid(txid),
             }));
           }
         } catch (error: any) {
@@ -321,7 +332,7 @@ async function monitorAddresses() {
             invoiceId,
             event: "reversal_webhook_error",
             error: error.message,
-            txid,
+            txid: truncateTxid(txid),
           }));
         }
 
@@ -340,11 +351,11 @@ async function monitorAddresses() {
 
         console.log(JSON.stringify({
           invoiceId,
-          address,
+          address: truncateAddress(address),
           event: "state_transition",
           from: "unseen",
           to: "pending",
-          txid,
+          txid: truncateTxid(txid),
           confirmations,
           amountSats,
         }));
@@ -369,11 +380,11 @@ async function monitorAddresses() {
 
         console.log(JSON.stringify({
           invoiceId,
-          address,
+          address: truncateAddress(address),
           event: "state_transition",
           from: "pending",
           to: "confirmed",
-          txid,
+          txid: truncateTxid(txid),
           confirmations,
           amountSats,
         }));
@@ -430,11 +441,11 @@ async function monitorAddresses() {
 
             console.log(JSON.stringify({
               invoiceId,
-              address,
+              address: truncateAddress(address),
               event: "state_transition",
               from: currentState,
               to: "settled",
-              txid,
+              txid: truncateTxid(txid),
               confirmations: recheckResult.confirmations,
             }));
 
@@ -444,7 +455,7 @@ async function monitorAddresses() {
               invoiceId,
               event: "payment_callback_failed",
               status: response.status,
-              txid,
+              txid: truncateTxid(txid),
             }));
           }
         } catch (error: any) {
@@ -452,7 +463,7 @@ async function monitorAddresses() {
             invoiceId,
             event: "payment_callback_error",
             error: error.message,
-            txid,
+            txid: truncateTxid(txid),
           }));
         }
       }
@@ -523,7 +534,7 @@ app.post("/create", async (req: Request, res: Response) => {
 
     console.log(JSON.stringify({
       invoiceId,
-      address,
+      address: truncateAddress(address),
       derivationPath: path,
       derivationIndex: index,
       amountSats,
