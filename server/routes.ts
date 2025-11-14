@@ -856,7 +856,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         new Date()
       );
 
-      console.log(`✓ Invoice ${invoiceId} marked as paid (tx: ${truncateTxid(transactionId)}, confirmations: ${confirmations})`);
+      console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "confirmed" }));
 
       // Queue webhook to main Altostratus app if configured
       const altostratusWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
