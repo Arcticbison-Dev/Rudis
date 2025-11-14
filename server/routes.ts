@@ -587,7 +587,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const isValidFormat = address.startsWith("bc1") || address.startsWith("tb1");
           
           if (!isValidFormat) {
-            console.error(`Invalid Bitcoin address format for invoice ${invoice.id}: ${address}`);
+            console.error(JSON.stringify({
+              invoiceId: invoice.id,
+              rail: "btc",
+              event: "address_validation_failed",
+              addressPrefix: address.substring(0, 4)
+            }));
             // Don't delete invoice - just return error
             return res.status(500).json({ 
               error: "Bitcoin address derivation failed",
@@ -601,7 +606,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
           invoice.paymentAddress = address;
           
-          console.log(`✓ Bitcoin address derived and assigned: ${address}`);
+          console.log(JSON.stringify({
+            invoiceId: invoice.id,
+            rail: "btc",
+            event: "address_created"
+          }));
         } catch (error: any) {
           console.error(`CRITICAL: Failed to derive Bitcoin address for invoice ${invoice.id}:`, error.message);
           

@@ -351,13 +351,8 @@ async function monitorAddresses() {
 
         console.log(JSON.stringify({
           invoiceId,
-          address: truncateAddress(address),
-          event: "state_transition",
-          from: "unseen",
-          to: "pending",
-          txid: truncateTxid(txid),
-          confirmations,
-          amountSats,
+          rail: "btc",
+          event: "tx_seen"
         }));
 
         continue;
@@ -380,13 +375,8 @@ async function monitorAddresses() {
 
         console.log(JSON.stringify({
           invoiceId,
-          address: truncateAddress(address),
-          event: "state_transition",
-          from: "pending",
-          to: "confirmed",
-          txid: truncateTxid(txid),
-          confirmations,
-          amountSats,
+          rail: "btc",
+          event: "confirmed"
         }));
 
         // Don't continue - let it proceed to the settled transition
@@ -441,29 +431,23 @@ async function monitorAddresses() {
 
             console.log(JSON.stringify({
               invoiceId,
-              address: truncateAddress(address),
-              event: "state_transition",
-              from: currentState,
-              to: "settled",
-              txid: truncateTxid(txid),
-              confirmations: recheckResult.confirmations,
+              rail: "btc",
+              event: "callback_sent"
             }));
 
             console.log(`✓ Payment confirmed and settled for invoice ${invoiceId}`);
           } else {
             console.error(JSON.stringify({
               invoiceId,
-              event: "payment_callback_failed",
-              status: response.status,
-              txid: truncateTxid(txid),
+              rail: "btc",
+              event: "callback_failed"
             }));
           }
         } catch (error: any) {
           console.error(JSON.stringify({
             invoiceId,
-            event: "payment_callback_error",
-            error: error.message,
-            txid: truncateTxid(txid),
+            rail: "btc",
+            event: "callback_failed"
           }));
         }
       }
@@ -534,12 +518,8 @@ app.post("/create", async (req: Request, res: Response) => {
 
     console.log(JSON.stringify({
       invoiceId,
-      address: truncateAddress(address),
-      derivationPath: path,
-      derivationIndex: index,
-      amountSats,
-      event: "address_created",
-      state: "unseen",
+      rail: "btc",
+      event: "address_created"
     }));
 
     res.json({
