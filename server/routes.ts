@@ -7,6 +7,17 @@ import axios, { AxiosError } from "axios";
 import crypto from "crypto";
 import rateLimit from "express-rate-limit";
 
+// Privacy helpers - truncate addresses and txids for logging
+function truncateAddress(address: string | null | undefined): string {
+  if (!address || address.length <= 16) return address || "null";
+  return `${address.substring(0, 8)}...${address.substring(address.length - 8)}`;
+}
+
+function truncateTxid(txid: string | null | undefined): string {
+  if (!txid || txid.length <= 16) return txid || "null";
+  return `${txid.substring(0, 8)}...${txid.substring(txid.length - 8)}`;
+}
+
 // Configuration from environment variables with sensible defaults and validation
 const parseIntWithDefault = (value: string | undefined, defaultValue: number): number => {
   if (!value) return defaultValue;
@@ -844,7 +855,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         new Date()
       );
 
-      console.log(`✓ Invoice ${invoiceId} marked as paid (tx: ${transactionId}, confirmations: ${confirmations})`);
+      console.log(`✓ Invoice ${invoiceId} marked as paid (tx: ${truncateTxid(transactionId)}, confirmations: ${confirmations})`);
 
       // Queue webhook to main Altostratus app if configured
       const altostratusWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
