@@ -267,14 +267,14 @@ export default function ApiDocs() {
             </div>
           </div>
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold">Webhook Payload</h4>
+            <h4 className="text-sm font-semibold">Webhook Payload (Minimal + Verification)</h4>
             <CopyButton
               value={JSON.stringify({
                 invoiceId: "550e8400-e29b-41d4-a716-446655440000",
+                status: "paid",
                 amount: "0.001",
                 currency: "BTC",
-                status: "paid",
-                paidAt: "2025-11-04T12:30:00Z",
+                timestamp: "2025-11-14T01:30:00.000Z",
               }, null, 2)}
             />
           </div>
@@ -282,13 +282,16 @@ export default function ApiDocs() {
             <code className="text-xs font-mono">
               {JSON.stringify({
                 invoiceId: "550e8400-e29b-41d4-a716-446655440000",
+                status: "paid",
                 amount: "0.001",
                 currency: "BTC",
-                status: "paid",
-                paidAt: "2025-11-04T12:30:00Z",
+                timestamp: "2025-11-14T01:30:00.000Z",
               }, null, 2)}
             </code>
           </pre>
+          <p className="text-xs text-muted-foreground mt-2">
+            This minimal payload allows you to verify that the payment matches your expected amount and currency (anti-fraud). The timestamp provides replay protection - reject webhooks older than 5 minutes. Query the Payments service API for additional details if needed.
+          </p>
           <div className="space-y-2">
             <h4 className="text-sm font-semibold">Reliability Features</h4>
             <ul className="text-xs text-muted-foreground space-y-1">
@@ -302,6 +305,585 @@ export default function ApiDocs() {
           <p className="text-xs text-muted-foreground">
             Set ALTOSTRATUS_WEBHOOK_URL and ALT_WEBHOOK_SECRET environment variables.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Webhook Verification Examples</CardTitle>
+          <CardDescription>
+            Secure webhook verification in Node.js, Python, and Go
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold">Node.js / Express</h4>
+              <CopyButton
+                value={`const crypto = require('crypto');
+const express = require('express');
+
+app.post('/webhooks/payment', express.json(), async (req, res) => {
+  const signature = req.headers['x-altostratus-signature'];
+  const secret = process.env.ALT_WEBHOOK_SECRET;
+  
+  // 1. Verify HMAC signature (timing-safe)
+  // Defensive: Check signature exists and is valid hex string
+  if (!signature || typeof signature !== 'string' || !/^[a-f0-9]{64}$/i.test(signature)) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+  
+  // Defensive: Validate request body exists
+  if (!req.body || typeof req.body !== 'object') {
+    return res.status(400).json({ error: 'Invalid request body' });
+  }
+  
+  // Note: express.json() already parsed body. We re-serialize for HMAC verification.
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(JSON.stringify(req.body))
+    .digest('hex');
+  
+  if (!crypto.timingSafeEqual(
+    Buffer.from(signature, 'hex'),
+    Buffer.from(expectedSignature, 'hex')
+  )) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+  
+  // 2. Extract and validate required fields
+  const { invoiceId, status, amount, currency, timestamp } = req.body;
+  if (!invoiceId || !status || !amount || !currency || !timestamp) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+  
+  // 3. Verify timestamp (replay protection - reject >5 min old)
+  // Defensive: Check timestamp exists and is valid ISO-8601
+  if (!timestamp || typeof timestamp !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid timestamp' });
+  }
+  const webhookTime = new Date(timestamp);
+  if (isNaN(webhookTime.getTime())) {
+    return res.status(400).json({ error: 'Invalid timestamp format' });
+  }
+  const webhookAge = Date.now() - webhookTime.getTime();
+  if (webhookAge > 5 * 60 * 1000 || webhookAge < 0) {
+    return res.status(400).json({ error: 'Webhook too old or from future' });
+  }
+  
+  // 4. Check idempotency (prevent duplicate processing)
+  const processed = await db.processedWebhooks.findOne({ invoiceId, timestamp });
+  if (processed) {
+    return res.json({ success: true, message: 'Already processed' });
+  }
+  
+  // 5. Verify amount/currency match expected values (anti-fraud)
+  const invoice = await db.invoices.findOne({ id: invoiceId });
+  if (!invoice) {
+    return res.status(404).json({ error: 'Invoice not found' });
+  }
+  
+  if (invoice.amount !== amount || invoice.currency !== currency) {
+    console.error(\`Payment mismatch: expected \${invoice.amount} \${invoice.currency}, got \${amount} \${currency}\`);
+    return res.status(400).json({ error: 'Payment verification failed' });
+  }
+  
+  // 6. Update your database (idempotent)
+  await db.invoices.update({ id: invoiceId }, { status: 'paid' });
+  await db.processedWebhooks.insert({ invoiceId, timestamp, processedAt: new Date() });
+  await activateSubscription(invoiceId);
+  
+  res.json({ success: true });
+});`}
+              />
+            </div>
+            <pre className="bg-muted p-4 rounded-md overflow-x-auto">
+              <code className="text-xs font-mono">
+{`const crypto = require('crypto');
+const express = require('express');
+
+app.post('/webhooks/payment', express.json(), async (req, res) => {
+  const signature = req.headers['x-altostratus-signature'];
+  const secret = process.env.ALT_WEBHOOK_SECRET;
+  
+  // 1. Verify HMAC signature (timing-safe)
+  // Defensive: Check signature exists and is valid hex string
+  if (!signature || typeof signature !== 'string' || !/^[a-f0-9]{64}$/i.test(signature)) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+  
+  // Defensive: Validate request body exists
+  if (!req.body || typeof req.body !== 'object') {
+    return res.status(400).json({ error: 'Invalid request body' });
+  }
+  
+  // Note: express.json() already parsed body. We re-serialize for HMAC verification.
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(JSON.stringify(req.body))
+    .digest('hex');
+  
+  if (!crypto.timingSafeEqual(
+    Buffer.from(signature, 'hex'),
+    Buffer.from(expectedSignature, 'hex')
+  )) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+  
+  // 2. Extract and validate required fields
+  const { invoiceId, status, amount, currency, timestamp } = req.body;
+  if (!invoiceId || !status || !amount || !currency || !timestamp) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+  
+  // 3. Verify timestamp (replay protection - reject >5 min old)
+  // Defensive: Check timestamp exists and is valid ISO-8601
+  if (!timestamp || typeof timestamp !== 'string') {
+    return res.status(400).json({ error: 'Missing or invalid timestamp' });
+  }
+  const webhookTime = new Date(timestamp);
+  if (isNaN(webhookTime.getTime())) {
+    return res.status(400).json({ error: 'Invalid timestamp format' });
+  }
+  const webhookAge = Date.now() - webhookTime.getTime();
+  if (webhookAge > 5 * 60 * 1000 || webhookAge < 0) {
+    return res.status(400).json({ error: 'Webhook too old or from future' });
+  }
+  
+  // 4. Check idempotency (prevent duplicate processing)
+  const processed = await db.processedWebhooks.findOne({ invoiceId, timestamp });
+  if (processed) {
+    return res.json({ success: true, message: 'Already processed' });
+  }
+  
+  // 5. Verify amount/currency match expected values (anti-fraud)
+  const invoice = await db.invoices.findOne({ id: invoiceId });
+  if (!invoice) {
+    return res.status(404).json({ error: 'Invoice not found' });
+  }
+  
+  if (invoice.amount !== amount || invoice.currency !== currency) {
+    console.error(\`Payment mismatch: expected \${invoice.amount} \${invoice.currency}, got \${amount} \${currency}\`);
+    return res.status(400).json({ error: 'Payment verification failed' });
+  }
+  
+  // 6. Update your database (idempotent)
+  await db.invoices.update({ id: invoiceId }, { status: 'paid' });
+  await db.processedWebhooks.insert({ invoiceId, timestamp, processedAt: new Date() });
+  await activateSubscription(invoiceId);
+  
+  res.json({ success: true });
+});`}
+              </code>
+            </pre>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold">Python / Flask</h4>
+              <CopyButton
+                value={`import os
+import hmac
+import hashlib
+import json
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/webhooks/payment', methods=['POST'])
+def handle_payment_webhook():
+    signature = request.headers.get('X-Altostratus-Signature')
+    secret = os.environ['ALT_WEBHOOK_SECRET']
+    
+    # 1. Verify HMAC signature (timing-safe)
+    # Defensive: Check signature exists and is valid hex string (64 chars for SHA256)
+    import re
+    if not signature or not isinstance(signature, str) or not re.match(r'^[a-f0-9]{64}$', signature, re.IGNORECASE):
+        return jsonify({'error': 'Invalid signature'}), 401
+    
+    body_bytes = request.get_data()
+    expected_signature = hmac.new(
+        secret.encode('utf-8'),
+        body_bytes,
+        hashlib.sha256
+    ).hexdigest()
+    
+    if not hmac.compare_digest(signature, expected_signature):
+        return jsonify({'error': 'Invalid signature'}), 401
+    
+    # 2. Extract and validate payload
+    payload = request.get_json(silent=True)
+    if not payload or not isinstance(payload, dict):
+        return jsonify({'error': 'Invalid request body'}), 400
+    
+    invoice_id = payload.get('invoiceId')
+    status = payload.get('status')
+    amount = payload.get('amount')
+    currency = payload.get('currency')
+    timestamp = payload.get('timestamp')
+    
+    # Validate required fields exist
+    if not all([invoice_id, status, amount, currency, timestamp]):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    # 3. Verify timestamp (replay protection - reject >5 min old)
+    # Defensive: Check timestamp exists and is valid ISO-8601
+    if not timestamp or not isinstance(timestamp, str):
+        return jsonify({'error': 'Missing or invalid timestamp'}), 400
+    
+    from datetime import datetime, timezone
+    try:
+        webhook_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+    except (ValueError, AttributeError):
+        return jsonify({'error': 'Invalid timestamp format'}), 400
+    
+    age_seconds = (datetime.now(timezone.utc) - webhook_time).total_seconds()
+    if age_seconds > 5 * 60 or age_seconds < 0:
+        return jsonify({'error': 'Webhook too old or from future'}), 400
+    
+    # 4. Check idempotency (prevent duplicate processing)
+    processed = db.processedWebhooks.find_one({'invoiceId': invoice_id, 'timestamp': timestamp})
+    if processed:
+        return jsonify({'success': True, 'message': 'Already processed'})
+    
+    # 5. Verify amount/currency match expected values (anti-fraud)
+    invoice = db.invoices.find_one({'id': invoice_id})
+    if not invoice:
+        return jsonify({'error': 'Invoice not found'}), 404
+    
+    if invoice['amount'] != amount or invoice['currency'] != currency:
+        print(f'Payment mismatch: expected {invoice["amount"]} {invoice["currency"]}, got {amount} {currency}')
+        return jsonify({'error': 'Payment verification failed'}), 400
+    
+    # 6. Update your database (idempotent)
+    db.invoices.update_one({'id': invoice_id}, {'$set': {'status': 'paid'}})
+    db.processedWebhooks.insert_one({'invoiceId': invoice_id, 'timestamp': timestamp, 'processedAt': datetime.now(timezone.utc)})
+    activate_subscription(invoice_id)
+    
+    return jsonify({'success': True})`}
+              />
+            </div>
+            <pre className="bg-muted p-4 rounded-md overflow-x-auto">
+              <code className="text-xs font-mono">
+{`import os
+import hmac
+import hashlib
+import json
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+@app.route('/webhooks/payment', methods=['POST'])
+def handle_payment_webhook():
+    signature = request.headers.get('X-Altostratus-Signature')
+    secret = os.environ['ALT_WEBHOOK_SECRET']
+    
+    # 1. Verify HMAC signature (timing-safe)
+    # Defensive: Check signature exists and is valid hex string (64 chars for SHA256)
+    import re
+    if not signature or not isinstance(signature, str) or not re.match(r'^[a-f0-9]{64}$', signature, re.IGNORECASE):
+        return jsonify({'error': 'Invalid signature'}), 401
+    
+    body_bytes = request.get_data()
+    expected_signature = hmac.new(
+        secret.encode('utf-8'),
+        body_bytes,
+        hashlib.sha256
+    ).hexdigest()
+    
+    if not hmac.compare_digest(signature, expected_signature):
+        return jsonify({'error': 'Invalid signature'}), 401
+    
+    # 2. Extract and validate payload
+    payload = request.get_json(silent=True)
+    if not payload or not isinstance(payload, dict):
+        return jsonify({'error': 'Invalid request body'}), 400
+    
+    invoice_id = payload.get('invoiceId')
+    status = payload.get('status')
+    amount = payload.get('amount')
+    currency = payload.get('currency')
+    timestamp = payload.get('timestamp')
+    
+    # Validate required fields exist
+    if not all([invoice_id, status, amount, currency, timestamp]):
+        return jsonify({'error': 'Missing required fields'}), 400
+    
+    # 3. Verify timestamp (replay protection - reject >5 min old)
+    # Defensive: Check timestamp exists and is valid ISO-8601
+    if not timestamp or not isinstance(timestamp, str):
+        return jsonify({'error': 'Missing or invalid timestamp'}), 400
+    
+    from datetime import datetime, timezone
+    try:
+        webhook_time = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+    except (ValueError, AttributeError):
+        return jsonify({'error': 'Invalid timestamp format'}), 400
+    
+    age_seconds = (datetime.now(timezone.utc) - webhook_time).total_seconds()
+    if age_seconds > 5 * 60 or age_seconds < 0:
+        return jsonify({'error': 'Webhook too old or from future'}), 400
+    
+    # 4. Check idempotency (prevent duplicate processing)
+    processed = db.processedWebhooks.find_one({'invoiceId': invoice_id, 'timestamp': timestamp})
+    if processed:
+        return jsonify({'success': True, 'message': 'Already processed'})
+    
+    # 5. Verify amount/currency match expected values (anti-fraud)
+    invoice = db.invoices.find_one({'id': invoice_id})
+    if not invoice:
+        return jsonify({'error': 'Invoice not found'}), 404
+    
+    if invoice['amount'] != amount or invoice['currency'] != currency:
+        print(f'Payment mismatch: expected {invoice["amount"]} {invoice["currency"]}, got {amount} {currency}')
+        return jsonify({'error': 'Payment verification failed'}), 400
+    
+    # 6. Update your database (idempotent)
+    db.invoices.update_one({'id': invoice_id}, {'$set': {'status': 'paid'}})
+    db.processedWebhooks.insert_one({'invoiceId': invoice_id, 'timestamp': timestamp, 'processedAt': datetime.now(timezone.utc)})
+    activate_subscription(invoice_id)
+    
+    return jsonify({'success': True})`}
+              </code>
+            </pre>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold">Go / Gin</h4>
+              <CopyButton
+                value={`package main
+
+import (
+    "crypto/hmac"
+    "crypto/sha256"
+    "crypto/subtle"
+    "encoding/hex"
+    "encoding/json"
+    "fmt"
+    "io"
+    "net/http"
+    "os"
+    
+    "github.com/gin-gonic/gin"
+)
+
+type WebhookPayload struct {
+    InvoiceID string \`json:"invoiceId"\`
+    Status    string \`json:"status"\`
+    Amount    string \`json:"amount"\`
+    Currency  string \`json:"currency"\`
+    Timestamp string \`json:"timestamp"\`
+}
+
+func HandlePaymentWebhook(c *gin.Context) {
+    signature := c.GetHeader("X-Altostratus-Signature")
+    secret := os.Getenv("ALT_WEBHOOK_SECRET")
+    
+    // 1. Read and verify HMAC signature (timing-safe)
+    // Defensive: Check signature exists and is valid hex string (64 chars for SHA256)
+    if signature == "" || len(signature) != 64 {
+        c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+        return
+    }
+    // Validate hex characters
+    if _, err := hex.DecodeString(signature); err != nil {
+        c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+        return
+    }
+    
+    bodyBytes, _ := io.ReadAll(c.Request.Body)
+    
+    mac := hmac.New(sha256.New, []byte(secret))
+    mac.Write(bodyBytes)
+    expectedSignature := hex.EncodeToString(mac.Sum(nil))
+    
+    if subtle.ConstantTimeCompare([]byte(signature), []byte(expectedSignature)) != 1 {
+        c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+        return
+    }
+    
+    // 2. Parse and validate payload
+    var payload WebhookPayload
+    if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+        return
+    }
+    
+    // Validate required fields exist
+    if payload.InvoiceID == "" || payload.Status == "" || 
+       payload.Amount == "" || payload.Currency == "" || payload.Timestamp == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Missing required fields"})
+        return
+    }
+    
+    // 3. Verify timestamp (replay protection - reject >5 min old)
+    webhookTime, err := time.Parse(time.RFC3339, payload.Timestamp)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid timestamp"})
+        return
+    }
+    if time.Since(webhookTime) > 5*time.Minute {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Webhook too old"})
+        return
+    }
+    
+    // 4. Check idempotency (prevent duplicate processing)
+    processed, _ := db.FindProcessedWebhook(payload.InvoiceID, payload.Timestamp)
+    if processed {
+        c.JSON(http.StatusOK, gin.H{"success": true, "message": "Already processed"})
+        return
+    }
+    
+    // 5. Verify amount/currency match expected values (anti-fraud)
+    invoice, err := db.FindInvoice(payload.InvoiceID)
+    if err != nil {
+        c.JSON(http.StatusNotFound, gin.H{"error": "Invoice not found"})
+        return
+    }
+    
+    if invoice.Amount != payload.Amount || invoice.Currency != payload.Currency {
+        fmt.Printf("Payment mismatch: expected %s %s, got %s %s\\n",
+            invoice.Amount, invoice.Currency, payload.Amount, payload.Currency)
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Payment verification failed"})
+        return
+    }
+    
+    // 6. Update your database (idempotent)
+    db.UpdateInvoice(payload.InvoiceID, "paid")
+    db.SaveProcessedWebhook(payload.InvoiceID, payload.Timestamp)
+    ActivateSubscription(payload.InvoiceID)
+    
+    c.JSON(http.StatusOK, gin.H{"success": true})
+}`}
+              />
+            </div>
+            <pre className="bg-muted p-4 rounded-md overflow-x-auto">
+              <code className="text-xs font-mono">
+{`package main
+
+import (
+    "crypto/hmac"
+    "crypto/sha256"
+    "crypto/subtle"
+    "encoding/hex"
+    "encoding/json"
+    "fmt"
+    "io"
+    "net/http"
+    "os"
+    
+    "github.com/gin-gonic/gin"
+)
+
+type WebhookPayload struct {
+    InvoiceID string \`json:"invoiceId"\`
+    Status    string \`json:"status"\`
+    Amount    string \`json:"amount"\`
+    Currency  string \`json:"currency"\`
+    Timestamp string \`json:"timestamp"\`
+}
+
+func HandlePaymentWebhook(c *gin.Context) {
+    signature := c.GetHeader("X-Altostratus-Signature")
+    secret := os.Getenv("ALT_WEBHOOK_SECRET")
+    
+    // 1. Read and verify HMAC signature (timing-safe)
+    // Defensive: Check signature exists and is valid hex string (64 chars for SHA256)
+    if signature == "" || len(signature) != 64 {
+        c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+        return
+    }
+    // Validate hex characters
+    if _, err := hex.DecodeString(signature); err != nil {
+        c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+        return
+    }
+    
+    bodyBytes, _ := io.ReadAll(c.Request.Body)
+    
+    mac := hmac.New(sha256.New, []byte(secret))
+    mac.Write(bodyBytes)
+    expectedSignature := hex.EncodeToString(mac.Sum(nil))
+    
+    if subtle.ConstantTimeCompare([]byte(signature), []byte(expectedSignature)) != 1 {
+        c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+        return
+    }
+    
+    // 2. Parse and validate payload
+    var payload WebhookPayload
+    if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON"})
+        return
+    }
+    
+    // Validate required fields exist
+    if payload.InvoiceID == "" || payload.Status == "" || 
+       payload.Amount == "" || payload.Currency == "" || payload.Timestamp == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Missing required fields"})
+        return
+    }
+    
+    // 3. Verify timestamp (replay protection - reject >5 min old)
+    webhookTime, err := time.Parse(time.RFC3339, payload.Timestamp)
+    if err != nil {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid timestamp"})
+        return
+    }
+    if time.Since(webhookTime) > 5*time.Minute {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Webhook too old"})
+        return
+    }
+    
+    // 4. Check idempotency (prevent duplicate processing)
+    processed, _ := db.FindProcessedWebhook(payload.InvoiceID, payload.Timestamp)
+    if processed {
+        c.JSON(http.StatusOK, gin.H{"success": true, "message": "Already processed"})
+        return
+    }
+    
+    // 5. Verify amount/currency match expected values (anti-fraud)
+    invoice, err := db.FindInvoice(payload.InvoiceID)
+    if err != nil {
+        c.JSON(http.StatusNotFound, gin.H{"error": "Invoice not found"})
+        return
+    }
+    
+    if invoice.Amount != payload.Amount || invoice.Currency != payload.Currency {
+        fmt.Printf("Payment mismatch: expected %s %s, got %s %s\\n",
+            invoice.Amount, invoice.Currency, payload.Amount, payload.Currency)
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Payment verification failed"})
+        return
+    }
+    
+    // 6. Update your database (idempotent)
+    db.UpdateInvoice(payload.InvoiceID, "paid")
+    db.SaveProcessedWebhook(payload.InvoiceID, payload.Timestamp)
+    ActivateSubscription(payload.InvoiceID)
+    
+    c.JSON(http.StatusOK, gin.H{"success": true})
+}`}
+              </code>
+            </pre>
+          </div>
+
+          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md p-4 mt-4">
+            <h4 className="text-sm font-semibold text-amber-900 dark:text-amber-100 mb-2">Security Best Practices (REQUIRED)</h4>
+            <ul className="text-xs text-amber-800 dark:text-amber-200 space-y-1">
+              <li>🔒 <strong>REQUIRED:</strong> Verify HMAC signature using timing-safe comparison</li>
+              <li>🔒 <strong>REQUIRED:</strong> Verify timestamp - reject webhooks older than 5 minutes (replay protection)</li>
+              <li>🔒 <strong>REQUIRED:</strong> Implement idempotency - store processed (invoiceId, timestamp) pairs to prevent duplicate processing</li>
+              <li>🔒 <strong>REQUIRED:</strong> Verify amount and currency match your database (anti-fraud/anti-tampering)</li>
+              <li>✓ Use HTTPS only - never expose webhook endpoints over HTTP</li>
+              <li>✓ Store ALT_WEBHOOK_SECRET securely (environment variables, secrets manager)</li>
+              <li>✓ Return 200 OK quickly - process async if needed to avoid retries</li>
+              <li>✓ Log webhook processing for audit trail (timestamp, invoiceId, result)</li>
+            </ul>
+            <p className="text-xs text-amber-800 dark:text-amber-200 mt-2 font-semibold">
+              ⚠️ Without idempotency checking, your system will process the same payment multiple times during retries, potentially granting duplicate subscriptions or credits.
+            </p>
+          </div>
         </CardContent>
       </Card>
 

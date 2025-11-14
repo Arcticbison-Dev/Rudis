@@ -663,12 +663,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
+          status: "paid",
           amount: updatedInvoice!.amount,
           currency: updatedInvoice!.currency,
-          status: "paid",
-          paidAt: updatedInvoice!.paidAt,
-          transactionId,
-          confirmations,
+          timestamp: new Date().toISOString(),
         };
         
         invoicePayloads.set(invoiceId, payload);
@@ -720,13 +718,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
+          status: "paid",
           amount: updatedInvoice!.amount,
           currency: updatedInvoice!.currency,
-          status: "paid",
-          paidAt: updatedInvoice!.paidAt,
-          transactionId,
-          confirmations,
-          blockHeight,
+          timestamp: new Date().toISOString(),
         };
         
         invoicePayloads.set(invoiceId, payload);
@@ -778,13 +773,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
+          status: "paid",
           amount: updatedInvoice!.amount,
           currency: updatedInvoice!.currency,
-          status: "paid",
-          paidAt: updatedInvoice!.paidAt,
-          transactionId,
-          confirmations,
-          blockHeight,
+          timestamp: new Date().toISOString(),
         };
         
         invoicePayloads.set(invoiceId, payload);
@@ -859,13 +851,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (altostratusWebhookUrl && updatedInvoice) {
         const webhookPayload = {
           invoiceId: updatedInvoice.id,
+          status: updatedInvoice.status,
           amount: updatedInvoice.amount,
           currency: updatedInvoice.currency,
-          status: updatedInvoice.status,
-          paidAt: updatedInvoice.paidAt,
-          transactionId,
-          confirmations,
-          blockHeight,
+          timestamp: new Date().toISOString(),
         };
 
         // Store payload for persistent retries
