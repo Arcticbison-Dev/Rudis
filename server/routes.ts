@@ -359,6 +359,10 @@ async function performDataRetentionCleanup() {
   }
 }
 
+// Note: transactionId (blockchain tx hashes) are stored in paymentTransactions
+// but are PUBLIC blockchain data, not PII - safe for long-term storage
+// Addresses in invoices are anonymized after 90 days (see above)
+
 // In-memory store for invoice payloads (needed for webhook retries after server restart)
 const invoicePayloads = new Map<string, any>();
 
@@ -407,6 +411,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
   setInterval(async () => {
     await processWebhookQueue(invoicePayloads);
   }, 5000);
+
+  // Periodic invoice expiration check (every 30 seconds)
+  setInterval(async () => {
+    await storage.checkAndExpireInvoices();
+  }, 30 * 1000);
 
   // Periodic cleanup of old failed webhooks (every hour)
   setInterval(async () => {

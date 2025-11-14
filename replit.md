@@ -143,6 +143,16 @@ All 10 production readiness phases completed:
   3. ✅ No public endpoint generates unlimited BTC addresses without auth
 - Documentation: `docs/RAIL_SECURITY_AUDIT_2025-11-14.md`
 
+**Data Retention & Privacy (2025-11-14):**
+- Implemented complete privacy compliance:
+  1. ✅ Auto-expiration: Periodic job (every 30s) marks invoices as expired when expiresAt passes
+  2. ✅ Late payments: Rejected with 400 error, logged as "expired", not processed
+  3. ✅ Auto-anonymization: Paid invoices >90 days hashed (salted SHA256), job runs every 24h
+  4. ✅ No PII: Zero user identifiers in schema, only PUBLIC blockchain hashes stored long-term
+- Policy: RETENTION_PAID_DAYS=90, RETENTION_MAX_DAYS=365, AUTO_ANONYMIZE_ENABLED=true
+- Manual override: `POST /api/privacy/anonymize/:id` for GDPR requests
+- Documentation: `docs/DATA_RETENTION_POLICY_2025-11-14.md`
+
 ## Documentation Suite
 - `docs/E2E_TESTING_GUIDE.md`: End-to-end testing procedures for all rails
 - `docs/OBSERVABILITY.md`: Monitoring, logging, metrics, and alerting
