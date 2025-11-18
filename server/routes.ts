@@ -7,6 +7,8 @@ import axios, { AxiosError } from "axios";
 import crypto from "crypto";
 import rateLimit from "express-rate-limit";
 import { getOrchestrator } from "./payment-orchestrator";
+import { PaymentCurrency, type CanonicalPayment } from "@shared/payment-orchestrator";
+import { z } from "zod";
 
 // Privacy helpers - truncate addresses and txids for logging
 function truncateAddress(address: string | null | undefined): string {
@@ -155,6 +157,78 @@ function authenticateAdmin(req: Request, res: Response, next: NextFunction) {
   }
   
   next();
+}
+
+// ============================================================================
+// Payment API Types & Helpers
+// ============================================================================
+
+/**
+ * Request schema for POST /payments
+ */
+const createPaymentRequestSchema = z.object({
+  rail: z.enum(["BTC", "XMR", "LN"]),
+  amount_atomic: z.string(),
+  metadata: z.record(z.any()).optional(),
+});
+
+/**
+ * Convert API rail name to database currency format
+ * API uses "LN", database uses "Lightning"
+ */
+function railToCurrency(rail: "BTC" | "XMR" | "LN"): "BTC" | "XMR" | "Lightning" {
+  return rail === "LN" ? "Lightning" : rail;
+}
+
+/**
+ * Convert database currency to API rail name
+ * Database uses "Lightning", API uses "LN"
+ */
+function currencyToRail(currency: string): "BTC" | "XMR" | "LN" {
+  return currency === "Lightning" ? "LN" : currency as "BTC" | "XMR" | "LN";
+}
+
+/**
+ * API response format for payments
+ * Simpler than CanonicalPayment, focused on client needs
+ */
+interface PaymentApiResponse {
+  id: string;
+  rail: "BTC" | "XMR" | "LN";
+  asset: "BTC" | "XMR";
+  /** Payment address (BTC/XMR) or invoice (LN) */
+  address: string;
+  amount_atomic: string;
+  status: "pending" | "confirming" | "confirmed" | "expired" | "failed";
+  confirmations?: number;
+  confirmations_required?: number;
+  amount_received?: string;
+  created_at: string;
+  updated_at: string;
+  expires_at?: string;
+}
+
+/**
+ * Transform CanonicalPayment to simpler API format
+ */
+function canonicalToApiResponse(payment: CanonicalPayment): PaymentApiResponse {
+  // Determine asset from rail
+  const asset = payment.currency === "LN" ? "BTC" : payment.currency;
+  
+  return {
+    id: payment.invoiceId,
+    rail: payment.currency,
+    asset,
+    address: payment.paymentAddress,
+    amount_atomic: payment.amountAtomic,
+    status: payment.status,
+    confirmations: payment.confirmations,
+    confirmations_required: payment.confirmationsRequired,
+    amount_received: payment.amountReceived,
+    created_at: payment.createdAt,
+    updated_at: payment.updatedAt,
+    ...(payment.expiresAt && { expires_at: payment.expiresAt }),
+  };
 }
 
 // Queue a webhook for delivery (creates pending webhook log)
@@ -530,6 +604,162 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.status(isHealthy ? 200 : 503).json(response);
   });
 
+  // ============================================================================
+  // Payment API Endpoints (Rail-Agnostic Client Interface)
+  // ============================================================================
+  
+  /**
+   * POST /payments - Create a new payment
+   * 
+   * Clean, rail-agnostic API for Altostratus apps and external clients.
+   * Protected by RAIL_AUTH_TOKEN.
+   * 
+   * Request: { rail, amount_atomic, metadata? }
+   * Response: { id, rail, asset, address, amount_atomic, status, ... }
+   */
+  app.post("/payments", authenticateRailCallback, async (req, res) => {
+    try {
+      // Validate request
+      const validated = createPaymentRequestSchema.parse(req.body);
+      const { rail, amount_atomic, metadata } = validated;
+      
+      // Get orchestrator
+      const orchestrator = getOrchestrator();
+      
+      // Check if rail is enabled
+      if (!orchestrator.isCurrencyEnabled(rail)) {
+        return res.status(400).json({ 
+          error: "rail_disabled",
+          message: `Payment rail ${rail} is not enabled on this server`
+        });
+      }
+      
+      // Create invoice first (generates ID, stores with placeholder address)
+      // Note: Database uses "Lightning", API uses "LN"
+      const invoice = await storage.createInvoice({
+        amount: amount_atomic,
+        currency: railToCurrency(rail),
+        paymentAddress: "pending", // Placeholder, will be updated
+        description: metadata?.description || `Payment via ${rail}`,
+      });
+      
+      // Create payment address via orchestrator
+      const payment = await orchestrator.createPayment(rail, {
+        invoiceId: invoice.id,
+        amountAtomic: amount_atomic,
+      });
+      
+      // Update invoice with real payment address
+      await storage.updateInvoice(invoice.id, {
+        paymentAddress: payment.paymentAddress,
+        ...(payment.expiresAt && { expiresAt: new Date(payment.expiresAt) }),
+      });
+      
+      // Update payment with final invoice ID for response
+      payment.invoiceId = invoice.id;
+      
+      // Transform to API response format
+      const apiResponse = canonicalToApiResponse(payment);
+      
+      console.log({
+        event: "payment_created",
+        paymentId: invoice.id,
+        rail,
+        amountAtomic: amount_atomic,
+      });
+      
+      res.status(201).json(apiResponse);
+      
+    } catch (error: any) {
+      console.error({
+        event: "payment_creation_failed",
+        error: error.message,
+      });
+      
+      // Handle validation errors
+      if (error.name === "ZodError") {
+        return res.status(400).json({ 
+          error: "validation_failed",
+          details: error.errors 
+        });
+      }
+      
+      // Handle orchestrator errors
+      if (error.message?.includes("not enabled") || error.message?.includes("not supported")) {
+        return res.status(400).json({ 
+          error: "rail_unavailable",
+          message: error.message 
+        });
+      }
+      
+      // Generic error
+      res.status(500).json({ 
+        error: "payment_creation_failed",
+        message: "Failed to create payment" 
+      });
+    }
+  });
+  
+  /**
+   * GET /payments/:id - Get payment status
+   * 
+   * Returns normalized status regardless of rail (BTC, XMR, LN).
+   * Protected by RAIL_AUTH_TOKEN.
+   * 
+   * Response: { id, rail, asset, address, amount_atomic, status, ... }
+   */
+  app.get("/payments/:id", authenticateRailCallback, async (req, res) => {
+    try {
+      const paymentId = req.params.id;
+      
+      // Get orchestrator
+      const orchestrator = getOrchestrator();
+      
+      // First, get the invoice from storage to determine the rail
+      const invoice = await storage.getInvoice(paymentId);
+      if (!invoice) {
+        return res.status(404).json({ 
+          error: "payment_not_found",
+          message: `Payment ${paymentId} not found`
+        });
+      }
+      
+      // Get payment status via orchestrator
+      const payment = await orchestrator.getPaymentStatus(
+        invoice.currency as "BTC" | "XMR" | "LN",
+        paymentId
+      );
+      
+      // Transform to API response format
+      const apiResponse = canonicalToApiResponse(payment);
+      
+      res.json(apiResponse);
+      
+    } catch (error: any) {
+      console.error({
+        event: "payment_status_failed",
+        paymentId: req.params.id,
+        error: error.message,
+      });
+      
+      if (error.message?.includes("not found")) {
+        return res.status(404).json({ 
+          error: "payment_not_found",
+          message: error.message 
+        });
+      }
+      
+      res.status(500).json({ 
+        error: "status_fetch_failed",
+        message: "Failed to fetch payment status" 
+      });
+    }
+  });
+
+  // ============================================================================
+  // Legacy Invoice Endpoints (Deprecated - Use /payments instead)
+  // ============================================================================
+  
   // Get all invoices
   app.get("/api/invoices", async (req, res) => {
     try {
