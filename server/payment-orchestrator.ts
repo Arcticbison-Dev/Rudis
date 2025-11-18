@@ -193,14 +193,14 @@ export class PaymentOrchestrator {
    */
   async healthCheck(): Promise<OrchestratorHealth> {
     const healthChecks = await Promise.allSettled([
-      this.config.enableBtc ? this.adapters.get("BTC")?.healthCheck() : null,
-      this.config.enableXmr ? this.adapters.get("XMR")?.healthCheck() : null,
-      this.config.enableLn ? this.adapters.get("LN")?.healthCheck() : null,
+      this.config.enableBtc ? this.adapters.get("BTC")?.healthCheck() : Promise.resolve(null),
+      this.config.enableXmr ? this.adapters.get("XMR")?.healthCheck() : Promise.resolve(null),
+      this.config.enableLn ? this.adapters.get("LN")?.healthCheck() : Promise.resolve(null),
     ]);
 
     const [btcHealth, xmrHealth, lnHealth] = healthChecks.map((result) =>
       result.status === "fulfilled" ? result.value : null
-    );
+    ) as [RailHealth | null, RailHealth | null, RailHealth | null];
 
     const enabledRails = [];
     if (this.config.enableBtc) enabledRails.push("BTC");

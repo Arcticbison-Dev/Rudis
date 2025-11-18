@@ -6,6 +6,7 @@ import { paymentConfirmationSchema as legacyPaymentConfirmationSchema } from "@s
 import axios, { AxiosError } from "axios";
 import crypto from "crypto";
 import rateLimit from "express-rate-limit";
+import { getOrchestrator } from "./payment-orchestrator";
 
 // Privacy helpers - truncate addresses and txids for logging
 function truncateAddress(address: string | null | undefined): string {
@@ -462,7 +463,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await processWebhookQueue(invoicePayloads);
   }, 1000);
 
-  // Health check endpoint
+  // Health check endpoint (enhanced with orchestrator)
   app.get("/health", async (req, res) => {
     const timestamp = new Date().toISOString();
     let storageStatus = "operational";
@@ -480,8 +481,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       storageStatus = "error";
       webhookStatus = "unknown";
     }
+
+    // Check payment orchestrator health (all rails)
+    const orchestrator = getOrchestrator();
+    const orchestratorHealth = await orchestrator.healthCheck();
     
-    const isHealthy = storageStatus === "operational" && webhookStatus === "operational";
+    const isHealthy = storageStatus === "operational" && 
+                      webhookStatus === "operational" && 
+                      orchestratorHealth.ok;
     const status = isHealthy ? "healthy" : "degraded";
     
     const response: any = {
@@ -490,6 +497,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       version: "1.0.0",
       storage: storageStatus,
       webhooks: webhookStatus,
+      paymentRails: {
+        enabled: orchestratorHealth.enabledRails,
+        btc: orchestratorHealth.rails.btc,
+        xmr: orchestratorHealth.rails.xmr,
+        ln: orchestratorHealth.rails.ln,
+      },
     };
     
     // Add issues and details if degraded
@@ -499,6 +512,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (webhookStatus === "queue_full") {
         response.issues.push("webhook_queue_full");
         response.pendingWebhookCount = pendingCount;
+      }
+      if (!orchestratorHealth.ok) {
+        response.issues.push("payment_rails_degraded");
       }
     }
     
