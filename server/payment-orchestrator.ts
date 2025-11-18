@@ -1,0 +1,295 @@
+/**
+ * Payment Orchestrator Service
+ * 
+ * Central service that provides a unified API for all payment rails (BTC, XMR, LN).
+ * Routes requests to appropriate rail adapters based on currency.
+ * 
+ * Benefits:
+ * - Single, stable API for Altostratus applications
+ * - Centralized error handling and retry logic
+ * - Feature flag support (ENABLE_BTC, ENABLE_XMR, ENABLE_LN)
+ * - Rail-agnostic business logic
+ * - Easy to add new payment rails
+ */
+
+import {
+  type RailAdapter,
+  type CanonicalPayment,
+  type CreatePaymentRequest,
+  type RailHealth,
+  PaymentCurrency,
+  UnsupportedCurrencyError,
+  RailUnavailableError,
+} from "../shared/payment-orchestrator";
+import { BtcAdapter } from "./adapters/btc-adapter";
+import { XmrAdapter } from "./adapters/xmr-adapter";
+import { LnAdapter } from "./adapters/ln-adapter";
+
+/**
+ * Payment Orchestrator Configuration
+ */
+interface OrchestratorConfig {
+  enableBtc: boolean;
+  enableXmr: boolean;
+  enableLn: boolean;
+}
+
+/**
+ * Health status for all rails
+ */
+interface OrchestratorHealth {
+  ok: boolean;
+  rails: {
+    btc: RailHealth | null;
+    xmr: RailHealth | null;
+    ln: RailHealth | null;
+  };
+  enabledRails: string[];
+}
+
+/**
+ * Payment Orchestrator
+ * 
+ * Coordinates payment operations across multiple rails (BTC, XMR, LN).
+ */
+export class PaymentOrchestrator {
+  private adapters: Map<PaymentCurrency, RailAdapter>;
+  private config: OrchestratorConfig;
+
+  constructor(config?: Partial<OrchestratorConfig>) {
+    // Load configuration from environment variables
+    this.config = {
+      enableBtc: config?.enableBtc ?? process.env.ENABLE_BTC === "true",
+      enableXmr: config?.enableXmr ?? process.env.ENABLE_XMR === "true",
+      enableLn: config?.enableLn ?? process.env.ENABLE_LN === "true",
+    };
+
+    // Initialize adapters
+    this.adapters = new Map();
+    
+    if (this.config.enableBtc) {
+      this.adapters.set("BTC", new BtcAdapter());
+      console.log("✓ Payment Orchestrator: BTC rail enabled");
+    }
+    
+    if (this.config.enableXmr) {
+      this.adapters.set("XMR", new XmrAdapter());
+      console.log("✓ Payment Orchestrator: XMR rail enabled");
+    }
+    
+    if (this.config.enableLn) {
+      this.adapters.set("LN", new LnAdapter());
+      console.log("✓ Payment Orchestrator: LN rail enabled");
+    }
+
+    // Validate at least one rail is enabled
+    if (this.adapters.size === 0) {
+      console.warn("⚠️ Payment Orchestrator: No payment rails enabled!");
+    }
+
+    console.log(`Payment Orchestrator initialized with ${this.adapters.size} rail(s)`);
+  }
+
+  /**
+   * Create a payment address for an invoice
+   * 
+   * Routes to the appropriate rail based on currency.
+   * 
+   * @param currency - Payment currency (BTC, XMR, LN)
+   * @param request - Payment creation request
+   * @returns Canonical payment with address
+   */
+  async createPayment(
+    currency: PaymentCurrency,
+    request: CreatePaymentRequest
+  ): Promise<CanonicalPayment> {
+    // Get the appropriate adapter
+    const adapter = this.getAdapter(currency);
+
+    // Create payment address via rail
+    const response = await adapter.createPayment(request);
+
+    // Map to canonical payment model
+    const payment: CanonicalPayment = {
+      invoiceId: request.invoiceId,
+      currency,
+      amountAtomic: request.amountAtomic,
+      paymentAddress: response.paymentAddress,
+      status: "pending",
+      confirmations: 0,
+      confirmationsRequired: response.confirmationsRequired,
+      transactions: [],
+      amountReceived: "0",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      ...(response.expiresAt && { expiresAt: response.expiresAt }),
+    };
+
+    console.log({
+      orchestrator: "createPayment",
+      invoiceId: request.invoiceId,
+      currency,
+      confirmationsRequired: response.confirmationsRequired,
+    });
+
+    return payment;
+  }
+
+  /**
+   * Get the current status of a payment
+   * 
+   * @param currency - Payment currency
+   * @param invoiceId - Invoice identifier
+   * @returns Current payment status
+   */
+  async getPaymentStatus(
+    currency: PaymentCurrency,
+    invoiceId: string
+  ): Promise<CanonicalPayment> {
+    const adapter = this.getAdapter(currency);
+    const status = await adapter.getPaymentStatus(invoiceId);
+
+    // Build canonical payment from status
+    const payment: CanonicalPayment = {
+      invoiceId,
+      currency,
+      amountAtomic: "0", // Not tracked in status response
+      paymentAddress: "", // Not tracked in status response
+      status: status.status,
+      confirmations: status.confirmations,
+      confirmationsRequired: adapter.currency === "LN" ? 0 : adapter.currency === "BTC" ? 6 : 10,
+      transactions: status.transactions,
+      amountReceived: status.amountReceived,
+      createdAt: new Date().toISOString(), // Not tracked
+      updatedAt: status.updatedAt,
+    };
+
+    return payment;
+  }
+
+  /**
+   * Cancel a payment (if supported by rail)
+   * 
+   * Currently only Lightning Network supports cancellation.
+   * 
+   * @param currency - Payment currency
+   * @param invoiceId - Invoice identifier
+   * @returns True if cancelled successfully
+   */
+  async cancelPayment(currency: PaymentCurrency, invoiceId: string): Promise<boolean> {
+    const adapter = this.getAdapter(currency);
+
+    if (!adapter.cancelPayment) {
+      throw new Error(`Payment cancellation not supported for ${currency}`);
+    }
+
+    return await adapter.cancelPayment(invoiceId);
+  }
+
+  /**
+   * Check health of all enabled rails
+   * 
+   * @returns Health status for all rails
+   */
+  async healthCheck(): Promise<OrchestratorHealth> {
+    const healthChecks = await Promise.allSettled([
+      this.config.enableBtc ? this.adapters.get("BTC")?.healthCheck() : null,
+      this.config.enableXmr ? this.adapters.get("XMR")?.healthCheck() : null,
+      this.config.enableLn ? this.adapters.get("LN")?.healthCheck() : null,
+    ]);
+
+    const [btcHealth, xmrHealth, lnHealth] = healthChecks.map((result) =>
+      result.status === "fulfilled" ? result.value : null
+    );
+
+    const enabledRails = [];
+    if (this.config.enableBtc) enabledRails.push("BTC");
+    if (this.config.enableXmr) enabledRails.push("XMR");
+    if (this.config.enableLn) enabledRails.push("LN");
+
+    // Overall health: true if at least one rail is healthy
+    const ok =
+      (btcHealth?.ok ?? false) ||
+      (xmrHealth?.ok ?? false) ||
+      (lnHealth?.ok ?? false);
+
+    return {
+      ok,
+      rails: {
+        btc: btcHealth,
+        xmr: xmrHealth,
+        ln: lnHealth,
+      },
+      enabledRails,
+    };
+  }
+
+  /**
+   * Get the adapter for a currency
+   * 
+   * @param currency - Payment currency
+   * @returns Rail adapter
+   * @throws UnsupportedCurrencyError if currency not supported
+   * @throws RailUnavailableError if rail disabled
+   */
+  private getAdapter(currency: PaymentCurrency): RailAdapter {
+    const adapter = this.adapters.get(currency);
+
+    if (!adapter) {
+      // Check if it's a valid currency but disabled
+      if (["BTC", "XMR", "LN"].includes(currency)) {
+        throw new RailUnavailableError(currency, {
+          reason: "Rail is disabled via feature flag",
+        });
+      }
+      throw new UnsupportedCurrencyError(currency);
+    }
+
+    return adapter;
+  }
+
+  /**
+   * Check if a currency is enabled
+   * 
+   * @param currency - Payment currency
+   * @returns True if enabled
+   */
+  isCurrencyEnabled(currency: PaymentCurrency): boolean {
+    return this.adapters.has(currency);
+  }
+
+  /**
+   * Get list of enabled currencies
+   * 
+   * @returns Array of enabled currencies
+   */
+  getEnabledCurrencies(): PaymentCurrency[] {
+    return Array.from(this.adapters.keys());
+  }
+}
+
+// Singleton instance
+let orchestrator: PaymentOrchestrator | null = null;
+
+/**
+ * Get the payment orchestrator singleton
+ * 
+ * @returns Payment orchestrator instance
+ */
+export function getOrchestrator(): PaymentOrchestrator {
+  if (!orchestrator) {
+    orchestrator = new PaymentOrchestrator();
+  }
+  return orchestrator;
+}
+
+/**
+ * Initialize orchestrator with custom config (for testing)
+ * 
+ * @param config - Orchestrator configuration
+ * @returns Payment orchestrator instance
+ */
+export function initOrchestrator(config: Partial<OrchestratorConfig>): PaymentOrchestrator {
+  orchestrator = new PaymentOrchestrator(config);
+  return orchestrator;
+}
