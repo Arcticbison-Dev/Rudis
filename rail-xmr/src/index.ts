@@ -189,6 +189,11 @@ async function monitorSubaddresses() {
         // PRIVACY: Hash txid before any storage operation
         const hashedTxid = hashTxid(rawTxid);
 
+        // CRITICAL: Validate amount on EVERY poll (supports top-up payments)
+        const expectedAmountStr = subaddress.expectedAmountAtomic;
+        const receivedAmountStr = rawAmount.toString();
+        const amountMatches = expectedAmountStr === receivedAmountStr;
+
         // Reload state to ensure we have latest (prevents race conditions)
         let currentState = storage.getPaymentState(state.invoiceId);
         if (!currentState) continue;
@@ -202,16 +207,11 @@ async function monitorSubaddresses() {
 
         // Transition: unseen → pending (transaction appears)
         if (currentState.state === "unseen") {
-          // CRITICAL: Validate amount matches expected value
-          const expectedAmountStr = subaddress.expectedAmountAtomic;
-          const receivedAmountStr = rawAmount.toString();
-          const amountMatches = expectedAmountStr === receivedAmountStr;
-
           // Store HASHED txid and VALIDATED amount match, NOT raw values
           storage.updatePaymentState(state.invoiceId, {
             state: "pending",
             hashedTxid: hashedTxid,
-            amountMatch: amountMatches, // ACTUAL comparison, not hardcoded
+            amountMatch: amountMatches, // Computed on every poll
             confirmations: confirmations.toString(),
             blockHeight: blockHeight.toString(),
           });
@@ -227,15 +227,34 @@ async function monitorSubaddresses() {
           if (!currentState) continue;
         }
 
+        // Update amountMatch on EVERY poll (allows top-up payments to settle)
+        if (currentState.state === "pending" || currentState.state === "confirmed") {
+          const previousAmountMatch = currentState.amountMatch;
+          
+          // Always update amountMatch to reflect current aggregate
+          storage.updatePaymentState(state.invoiceId, {
+            amountMatch: amountMatches,
+          });
+
+          // Log when amount match status changes
+          if (previousAmountMatch === false && amountMatches === true) {
+            console.log(JSON.stringify({
+              invoiceId: state.invoiceId,
+              rail: "xmr",
+              event: "amount_matched_after_topup"
+            }));
+          }
+
+          // Reload state after update
+          currentState = storage.getPaymentState(state.invoiceId);
+          if (!currentState) continue;
+        }
+
         // CRITICAL: Block settlement if amount doesn't match
         if (currentState.amountMatch === false) {
           // Amount mismatch detected - stop processing this invoice
-          console.error(JSON.stringify({
-            invoiceId: state.invoiceId,
-            rail: "xmr",
-            event: "settlement_blocked_amount_mismatch"
-          }));
-          continue; // Skip to next invoice, never settle this one
+          // Will retry on next poll (supports top-up payments)
+          continue; // Skip to next invoice until amount matches
         }
 
         // Update confirmations for pending/confirmed states
