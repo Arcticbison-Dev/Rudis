@@ -273,22 +273,27 @@ async function monitorAddresses() {
 
           if (reversalResponse.status === 200) {
             console.log(JSON.stringify({
-              invoiceId,
               rail: "btc",
-              event: "callback_sent"
+              event: "webhook.success",
+              id: invoiceId,
+              context: "reorg_reversal"
             }));
           } else {
             console.error(JSON.stringify({
-              invoiceId,
               rail: "btc",
-              event: "callback_failed"
+              event: "webhook.failed",
+              id: invoiceId,
+              error: `HTTP ${reversalResponse.status}`,
+              context: "reorg_reversal"
             }));
           }
         } catch (error: any) {
           console.error(JSON.stringify({
-            invoiceId,
             rail: "btc",
-            event: "callback_failed"
+            event: "webhook.failed",
+            id: invoiceId,
+            error: error.message,
+            context: "reorg_reversal"
           }));
         }
 
@@ -306,9 +311,10 @@ async function monitorAddresses() {
         });
 
         console.log(JSON.stringify({
-          invoiceId,
           rail: "btc",
-          event: "tx_seen"
+          event: "payment.pending",
+          id: invoiceId,
+          tx_hash: txid
         }));
 
         continue;
@@ -330,9 +336,11 @@ async function monitorAddresses() {
         });
 
         console.log(JSON.stringify({
-          invoiceId,
           rail: "btc",
-          event: "confirmed"
+          event: "payment.confirmed",
+          id: invoiceId,
+          tx_hash: txid,
+          confirmations: confirmations
         }));
 
         // Don't continue - let it proceed to the settled transition
@@ -379,22 +387,27 @@ async function monitorAddresses() {
             });
 
             console.log(JSON.stringify({
-              invoiceId,
               rail: "btc",
-              event: "callback_sent"
+              event: "webhook.success",
+              id: invoiceId,
+              context: "payment_callback"
             }));
           } else {
             console.error(JSON.stringify({
-              invoiceId,
               rail: "btc",
-              event: "callback_failed"
+              event: "webhook.failed",
+              id: invoiceId,
+              error: `HTTP ${callbackResponse.status}`,
+              context: "payment_callback"
             }));
           }
         } catch (error: any) {
           console.error(JSON.stringify({
-            invoiceId,
             rail: "btc",
-            event: "callback_failed"
+            event: "webhook.failed",
+            id: invoiceId,
+            error: error.message,
+            context: "payment_callback"
           }));
         }
       }
@@ -465,9 +478,10 @@ app.post("/create", authenticatePaymentsService, async (req: Request, res: Respo
     });
 
     console.log(JSON.stringify({
-      invoiceId,
       rail: "btc",
-      event: "address_created"
+      event: "payment.created",
+      id: invoiceId,
+      address: address
     }));
 
     res.json({

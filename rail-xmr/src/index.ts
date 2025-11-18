@@ -134,24 +134,29 @@ async function callbackPaymentsService(
 
     if (response.status === 200) {
       console.log(JSON.stringify({
-        invoiceId,
         rail: "xmr",
-        event: "callback_sent"
+        event: "webhook.success",
+        id: invoiceId,
+        context: "payment_callback"
       }));
       return true;
     } else {
       console.error(JSON.stringify({
-        invoiceId,
         rail: "xmr",
-        event: "callback_failed"
+        event: "webhook.failed",
+        id: invoiceId,
+        error: `HTTP ${response.status}`,
+        context: "payment_callback"
       }));
       return false;
     }
   } catch (error: any) {
     console.error(JSON.stringify({
-      invoiceId,
       rail: "xmr",
-      event: "callback_failed"
+      event: "webhook.failed",
+      id: invoiceId,
+      error: error.message,
+      context: "payment_callback"
     }));
     return false;
   }
@@ -247,9 +252,11 @@ async function monitorSubaddresses() {
           });
 
           console.log(JSON.stringify({
-            invoiceId: state.invoiceId,
             rail: "xmr",
-            event: amountMatches ? "tx_seen" : "amount_mismatch"
+            event: amountMatches ? "payment.pending" : "payment.error",
+            id: state.invoiceId,
+            tx_hash: hashedTxid,
+            ...(amountMatches ? {} : { error: "amount_mismatch" })
           }));
 
           // Reload state after transition
@@ -269,9 +276,10 @@ async function monitorSubaddresses() {
           // Log when amount match status changes
           if (previousAmountMatch === false && amountMatches === true) {
             console.log(JSON.stringify({
-              invoiceId: state.invoiceId,
               rail: "xmr",
-              event: "amount_matched_after_topup"
+              event: "payment.pending",
+              id: state.invoiceId,
+              context: "amount_matched_after_topup"
             }));
           }
 
@@ -303,9 +311,11 @@ async function monitorSubaddresses() {
           });
 
           console.log(JSON.stringify({
-            invoiceId: state.invoiceId,
             rail: "xmr",
-            event: "confirmed"
+            event: "payment.confirmed",
+            id: state.invoiceId,
+            tx_hash: hashedTxid,
+            confirmations: confirmations
           }));
 
           // Reload state after transition
@@ -331,9 +341,11 @@ async function monitorSubaddresses() {
           if (currentState.callbackAttempts >= MAX_CALLBACK_ATTEMPTS) {
             // Max retries already reached, stop attempting
             console.error(JSON.stringify({
-              invoiceId: state.invoiceId,
               rail: "xmr",
-              event: "callback_max_retries_exceeded"
+              event: "poll_failed",
+              id: state.invoiceId,
+              error: "callback_max_retries_exceeded",
+              context: "callback_retry_limit"
             }));
             continue; // Skip to next invoice, manual intervention required
           }
@@ -362,9 +374,11 @@ async function monitorSubaddresses() {
           } else if (newAttempts >= MAX_CALLBACK_ATTEMPTS) {
             // Max retries reached, log for manual intervention
             console.error(JSON.stringify({
-              invoiceId: state.invoiceId,
               rail: "xmr",
-              event: "callback_max_retries"
+              event: "poll_failed",
+              id: state.invoiceId,
+              error: "callback_max_retries",
+              context: "callback_retry_limit"
             }));
           }
           // If callback failed but retries remain, will retry on next poll
@@ -444,9 +458,10 @@ app.post("/create", authenticatePaymentsService, async (req: Request, res: Respo
     storage.createPaymentState(invoiceId, rpcResult.address);
 
     console.log(JSON.stringify({
-      invoiceId,
       rail: "xmr",
-      event: "subaddress_created"
+      event: "payment.created",
+      id: invoiceId,
+      address: rpcResult.address
     }));
 
     res.json({

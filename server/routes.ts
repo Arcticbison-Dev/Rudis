@@ -690,20 +690,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Transform to API response format
       const apiResponse = canonicalToApiResponse(payment);
       
-      console.log({
-        event: "payment_created",
-        paymentId: invoice.id,
+      // Note: monitoring.logPaymentCreated() already called by orchestrator
+      // This is additional structured logging for the HTTP layer
+      console.log(JSON.stringify({
+        event: "payment.created",
         rail,
-        amountAtomic: amount_atomic,
-      });
+        id: invoice.id,
+        amount_atomic: amount_atomic,
+      }));
       
       res.status(201).json(apiResponse);
       
     } catch (error: any) {
-      console.error({
-        event: "payment_creation_failed",
+      console.error(JSON.stringify({
+        event: "payment.error",
         error: error.message,
-      });
+        context: "payment_creation",
+      }));
       
       // Handle validation errors
       if (error.name === "ZodError") {
@@ -765,11 +768,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(apiResponse);
       
     } catch (error: any) {
-      console.error({
-        event: "payment_status_failed",
-        paymentId: req.params.id,
+      console.error(JSON.stringify({
+        event: "payment.error",
+        id: req.params.id,
         error: error.message,
-      });
+        context: "status_fetch",
+      }));
       
       if (error.message?.includes("not found")) {
         return res.status(404).json({ 
@@ -948,9 +952,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateInvoiceStatus(invoiceId, "confirmed", new Date());
       
-      console.log(JSON.stringify({ invoiceId, rail: "ln", event: "settled", status: "confirmed" }));
+      // Log payment confirmation with transaction details
+      console.log(JSON.stringify({ 
+        rail: "ln", 
+        event: "payment.confirmed", 
+        id: invoiceId,
+        tx_hash: transactionId,
+        confirmations: confirmations 
+      }));
       
-      // Log payment confirmed for monitoring
+      // Log to monitoring system
       monitoring.logPaymentStatus("LN", invoiceId, "confirmed");
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
@@ -1006,9 +1017,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateInvoiceStatus(invoiceId, "confirmed", new Date());
       
-      console.log(JSON.stringify({ invoiceId, rail: "btc", event: "confirmed", status: "confirmed" }));
+      // Log payment confirmation with transaction details
+      console.log(JSON.stringify({ 
+        rail: "btc", 
+        event: "payment.confirmed", 
+        id: invoiceId,
+        tx_hash: transactionId,
+        confirmations: confirmations,
+        block_height: blockHeight
+      }));
       
-      // Log payment confirmed for monitoring
+      // Log to monitoring system
       monitoring.logPaymentStatus("BTC", invoiceId, "confirmed");
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
@@ -1064,9 +1083,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateInvoiceStatus(invoiceId, "confirmed", new Date());
       
-      console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "confirmed" }));
+      // Log payment confirmation with transaction details
+      console.log(JSON.stringify({ 
+        rail: "xmr", 
+        event: "payment.confirmed", 
+        id: invoiceId,
+        tx_hash: transactionId,
+        confirmations: confirmations,
+        block_height: blockHeight
+      }));
       
-      // Log payment confirmed for monitoring
+      // Log to monitoring system
       monitoring.logPaymentStatus("XMR", invoiceId, "confirmed");
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
