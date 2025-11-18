@@ -9,6 +9,7 @@ import rateLimit from "express-rate-limit";
 import { getOrchestrator } from "./payment-orchestrator";
 import { PaymentCurrency, type CanonicalPayment } from "@shared/payment-orchestrator";
 import { z } from "zod";
+import * as monitoring from "./monitoring";
 
 // Privacy helpers - truncate addresses and txids for logging
 function truncateAddress(address: string | null | undefined): string {
@@ -283,6 +284,10 @@ async function attemptWebhookDelivery(
         retryAfter: null,
       });
       console.log(`✓ Webhook delivered successfully to ${url} (attempt ${currentAttempt})`);
+      
+      // Log successful webhook delivery
+      monitoring.logWebhookResult(invoiceId, true, response.status);
+      
       return true;
     } else {
       // Failed but might retry - INCREMENT attempt counter for next retry
@@ -299,6 +304,11 @@ async function attemptWebhookDelivery(
         lastAttemptAt: new Date(),
         retryAfter,
       });
+
+      // Log failed webhook delivery
+      if (!shouldRetry) {
+        monitoring.logWebhookResult(invoiceId, false, response.status);
+      }
 
       // Silent - webhook status tracked in database
       return false;
@@ -322,6 +332,11 @@ async function attemptWebhookDelivery(
       lastAttemptAt: new Date(),
       retryAfter,
     });
+
+    // Log failed webhook delivery
+    if (!shouldRetry) {
+      monitoring.logWebhookResult(invoiceId, false, statusCode);
+    }
 
     // Silent - webhook status tracked in database
     return false;
@@ -602,6 +617,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     res.status(isHealthy ? 200 : 503).json(response);
+  });
+
+  // Monitoring metrics endpoint
+  app.get("/metrics", (req, res) => {
+    const metrics = monitoring.getMetrics();
+    res.json(metrics);
   });
 
   // ============================================================================
@@ -907,6 +928,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(JSON.stringify({ invoiceId, rail: "ln", event: "settled", status: "confirmed" }));
       
+      // Log payment confirmed for monitoring
+      monitoring.logPaymentStatus("LN", invoiceId, "confirmed");
+      
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       if (altWebhookUrl) {
         const updatedInvoice = await storage.getInvoice(invoiceId);
@@ -962,6 +986,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(JSON.stringify({ invoiceId, rail: "btc", event: "confirmed", status: "confirmed" }));
       
+      // Log payment confirmed for monitoring
+      monitoring.logPaymentStatus("BTC", invoiceId, "confirmed");
+      
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       if (altWebhookUrl) {
         const updatedInvoice = await storage.getInvoice(invoiceId);
@@ -1016,6 +1043,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
       
       console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "confirmed" }));
+      
+      // Log payment confirmed for monitoring
+      monitoring.logPaymentStatus("XMR", invoiceId, "confirmed");
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       if (altWebhookUrl) {

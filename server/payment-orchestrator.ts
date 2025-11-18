@@ -25,6 +25,7 @@ import { BtcAdapter } from "./adapters/btc-adapter";
 import { XmrAdapter } from "./adapters/xmr-adapter";
 import { LnAdapter } from "./adapters/ln-adapter";
 import { storage } from "./storage";
+import * as monitoring from "./monitoring";
 
 /**
  * Payment Orchestrator Configuration
@@ -104,36 +105,45 @@ export class PaymentOrchestrator {
     currency: PaymentCurrency,
     request: CreatePaymentRequest
   ): Promise<CanonicalPayment> {
-    // Get the appropriate adapter
-    const adapter = this.getAdapter(currency);
+    try {
+      // Get the appropriate adapter
+      const adapter = this.getAdapter(currency);
 
-    // Create payment address via rail
-    const response = await adapter.createPayment(request);
+      // Create payment address via rail
+      const response = await adapter.createPayment(request);
 
-    // Map to canonical payment model
-    const payment: CanonicalPayment = {
-      invoiceId: request.invoiceId,
-      currency,
-      amountAtomic: request.amountAtomic,
-      paymentAddress: response.paymentAddress,
-      status: "pending",
-      confirmations: 0,
-      confirmationsRequired: response.confirmationsRequired,
-      transactions: [],
-      amountReceived: "0",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      ...(response.expiresAt && { expiresAt: response.expiresAt }),
-    };
+      // Map to canonical payment model
+      const payment: CanonicalPayment = {
+        invoiceId: request.invoiceId,
+        currency,
+        amountAtomic: request.amountAtomic,
+        paymentAddress: response.paymentAddress,
+        status: "pending",
+        confirmations: 0,
+        confirmationsRequired: response.confirmationsRequired,
+        transactions: [],
+        amountReceived: "0",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...(response.expiresAt && { expiresAt: response.expiresAt }),
+      };
 
-    console.log({
-      orchestrator: "createPayment",
-      invoiceId: request.invoiceId,
-      currency,
-      confirmationsRequired: response.confirmationsRequired,
-    });
+      console.log({
+        orchestrator: "createPayment",
+        invoiceId: request.invoiceId,
+        currency,
+        confirmationsRequired: response.confirmationsRequired,
+      });
 
-    return payment;
+      // Log monitoring event
+      monitoring.logPaymentCreated(currency, request.invoiceId, request.amountAtomic);
+
+      return payment;
+    } catch (error: any) {
+      // Log error for monitoring
+      monitoring.logPaymentError(currency, request.invoiceId, error.message);
+      throw error;
+    }
   }
 
   /**
@@ -224,6 +234,17 @@ export class PaymentOrchestrator {
     if (this.config.enableBtc) enabledRails.push("BTC");
     if (this.config.enableXmr) enabledRails.push("XMR");
     if (this.config.enableLn) enabledRails.push("LN");
+
+    // Log rail health status for monitoring (only if rail is enabled and health check returned)
+    if (this.config.enableBtc && btcHealth) {
+      monitoring.logRailHealth("BTC", btcHealth.ok, btcHealth.error);
+    }
+    if (this.config.enableXmr && xmrHealth) {
+      monitoring.logRailHealth("XMR", xmrHealth.ok, xmrHealth.error);
+    }
+    if (this.config.enableLn && lnHealth) {
+      monitoring.logRailHealth("LN", lnHealth.ok, lnHealth.error);
+    }
 
     // Overall health: true if at least one rail is healthy
     const ok =
