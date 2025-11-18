@@ -866,17 +866,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } catch (error: any) {
         // Handle orchestrator errors
         if (error.code === "RAIL_UNAVAILABLE") {
+          // Log internally but don't expose details to client
+          console.error({
+            event: "rail_unavailable",
+            currency,
+            invoiceId: invoice.id,
+            error: error.message,
+          });
+          
           return res.status(503).json({ 
-            error: "Payment rail unavailable",
-            details: error.message,
-            hint: `Check if ${currency} rail service is running and configured correctly`
+            error: "rail_unavailable",
+            message: `Payment rail ${currency} is temporarily unavailable`
           });
         }
         
-        // Silent error - address derivation failed
+        // Silent error - address derivation failed (log internally, generic to client)
+        console.error({
+          event: "address_generation_failed",
+          currency,
+          invoiceId: invoice.id,
+          error: error.message,
+        });
+        
         return res.status(500).json({ 
-          error: "Payment address generation failed",
-          details: error.message,
+          error: "address_generation_failed",
+          message: "Failed to generate payment address"
         });
       }
       
