@@ -169,7 +169,11 @@ function authenticateAdmin(req: Request, res: Response, next: NextFunction) {
  */
 const createPaymentRequestSchema = z.object({
   rail: z.enum(["BTC", "XMR", "LN"]),
-  amount_atomic: z.string(),
+  amount_atomic: z.string()
+    .regex(/^\d+$/, "amount_atomic must be a positive integer string")
+    .refine((val) => BigInt(val) > 0, {
+      message: "amount_atomic must be greater than 0"
+    }),
   metadata: z.record(z.any()).optional(),
 });
 
