@@ -24,6 +24,7 @@ import {
 import { BtcAdapter } from "./adapters/btc-adapter";
 import { XmrAdapter } from "./adapters/xmr-adapter";
 import { LnAdapter } from "./adapters/ln-adapter";
+import { storage } from "./storage";
 
 /**
  * Payment Orchestrator Configuration
@@ -138,30 +139,47 @@ export class PaymentOrchestrator {
   /**
    * Get the current status of a payment
    * 
+   * Combines rail status with stored invoice data to provide complete canonical payment.
+   * 
    * @param currency - Payment currency
    * @param invoiceId - Invoice identifier
-   * @returns Current payment status
+   * @returns Current payment status with complete canonical fields
    */
   async getPaymentStatus(
     currency: PaymentCurrency,
     invoiceId: string
   ): Promise<CanonicalPayment> {
     const adapter = this.getAdapter(currency);
+
+    // Load invoice from storage to get complete data
+    const invoice = await storage.getInvoice(invoiceId);
+    if (!invoice) {
+      throw new Error(`Invoice ${invoiceId} not found in storage`);
+    }
+
+    // Get rail-specific status
     const status = await adapter.getPaymentStatus(invoiceId);
 
-    // Build canonical payment from status
+    // Map confirmations required based on currency
+    const confirmationsRequired = 
+      adapter.currency === "LN" ? 0 : 
+      adapter.currency === "BTC" ? 6 : 
+      10; // XMR
+
+    // Build canonical payment from storage + rail status
     const payment: CanonicalPayment = {
       invoiceId,
       currency,
-      amountAtomic: "0", // Not tracked in status response
-      paymentAddress: "", // Not tracked in status response
+      amountAtomic: invoice.amount, // From storage
+      paymentAddress: invoice.paymentAddress, // From storage
       status: status.status,
       confirmations: status.confirmations,
-      confirmationsRequired: adapter.currency === "LN" ? 0 : adapter.currency === "BTC" ? 6 : 10,
+      confirmationsRequired,
       transactions: status.transactions,
       amountReceived: status.amountReceived,
-      createdAt: new Date().toISOString(), // Not tracked
+      createdAt: invoice.createdAt.toISOString(), // From storage
       updatedAt: status.updatedAt,
+      ...(invoice.expiresAt && { expiresAt: invoice.expiresAt.toISOString() }),
     };
 
     return payment;
