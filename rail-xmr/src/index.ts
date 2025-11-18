@@ -84,15 +84,23 @@ const createSubaddressSchema = z.object({
 
 // Authentication middleware - Validates requests from payments service only
 function authenticatePaymentsService(req: Request, res: Response, next: NextFunction) {
+  // Fail fast if RAIL_AUTH_TOKEN is not configured
+  if (!RAIL_AUTH_TOKEN || RAIL_AUTH_TOKEN.length === 0) {
+    console.error("CRITICAL: RAIL_AUTH_TOKEN not configured but /create endpoint called");
+    return res.status(500).json({ error: "Server configuration error" });
+  }
+  
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    console.warn("Rail /create rejected: missing or invalid Authorization header");
     return res.status(401).json({ error: "Unauthorized" });
   }
 
   const token = authHeader.substring(7);
 
-  if (!token || token !== RAIL_AUTH_TOKEN) {
+  if (!token || token.length === 0 || token !== RAIL_AUTH_TOKEN) {
+    console.warn("Rail /create rejected: invalid token");
     return res.status(401).json({ error: "Unauthorized" });
   }
 
