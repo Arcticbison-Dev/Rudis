@@ -46,6 +46,18 @@ if (!XMR_RPC_USERNAME || !XMR_RPC_PASSWORD) {
   console.error("╚═══════════════════════════════════════════════════════════╝");
   process.exit(1);
 }
+
+// PRIVACY: Enforce localhost RPC (prevent unencrypted remote connections)
+if (XMR_RPC_HOST !== "127.0.0.1" && XMR_RPC_HOST !== "localhost") {
+  console.error("╔═══════════════════════════════════════════════════════════╗");
+  console.error("║ FATAL: Remote RPC host detected                          ║");
+  console.error("║ For privacy, only localhost connections allowed          ║");
+  console.error("║ Use SSH tunnel for remote wallets:                       ║");
+  console.error("║   ssh -L 18082:127.0.0.1:18082 user@remote-server        ║");
+  console.error("║ Then set XMR_RPC_HOST=127.0.0.1                           ║");
+  console.error("╚═══════════════════════════════════════════════════════════╝");
+  process.exit(1);
+}
 const XMR_ACCOUNT_INDEX = parseInt(process.env.XMR_ACCOUNT_INDEX || "0", 10);
 const XMR_CONFIRMATIONS_REQUIRED = parseInt(process.env.XMR_CONFIRMATIONS_REQUIRED || "10", 10);
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || "30000", 10);

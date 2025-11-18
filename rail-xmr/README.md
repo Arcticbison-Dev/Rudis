@@ -121,12 +121,19 @@ monero-wallet-rpc \
   --wallet-file viewonly_wallet \
   --password "" \
   --rpc-bind-port 18082 \
+  --rpc-bind-ip 127.0.0.1 \
   --daemon-address node.moneroworld.com:18089 \
-  --rpc-login username:password \
-  --confirm-external-bind
+  --rpc-login username:password
 ```
 
-**Important:** View-only wallets can see incoming payments but cannot spend funds.
+**Important Security Notes:**
+- View-only wallets can see incoming payments but cannot spend funds
+- RPC binds to localhost only (`127.0.0.1`) for privacy
+- For remote wallet RPC, use SSH tunnel:
+  ```bash
+  ssh -L 18082:127.0.0.1:18082 user@remote-server
+  ```
+  Then connect to `localhost:18082` from the rail service
 
 ### 3. Start Rail Service
 

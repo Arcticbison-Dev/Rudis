@@ -623,7 +623,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      console.log(`✓ Invoice created: ${invoice.id} for ${invoice.amount} ${invoice.currency}`);
+      console.log(JSON.stringify({
+        invoiceId: invoice.id,
+        rail: invoice.currency.toLowerCase(),
+        event: "invoice_created"
+      }));
       res.status(201).json(invoice);
     } catch (error: any) {
       if (error.name === "ZodError") {
