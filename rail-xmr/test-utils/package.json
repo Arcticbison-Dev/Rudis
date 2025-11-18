@@ -1,0 +1,9 @@
+{
+  "name": "xmr-rail-test-utils",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "mock-rpc": "tsx mock-wallet-rpc.ts",
+    "integration-test": "tsx run-integration-test.ts"
+  }
+}
