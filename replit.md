@@ -12,6 +12,17 @@ Altostratus Payments is a privacy-focused, self-hosted crypto payment invoice sy
 - Configurable timeouts and retention policies via environment variables
 - Security: Prevent re-use of expired invoice IDs
 
+## Recent Changes
+
+**Cross-Rail Monitoring & Alerting System (2025-11-18):**
+- Centralized event logging with consistent rail + event format (payment.created, payment.confirmed, webhook.success, etc.)
+- Alert detection system with configurable thresholds (error spikes, poll failures, webhook failures, rail unavailability)
+- Optional webhook notifications for critical alerts via ALERT_WEBHOOK_URL
+- GET /metrics endpoint for real-time monitoring and observability
+- Integrated into orchestrator, rail callbacks, and webhook delivery
+- Automatic cleanup prevents unbounded memory growth
+- Architect-approved: Production-ready with no security issues
+
 ## System Architecture
 
 Altostratus Payments consists of a React frontend and an Express.js backend, communicating with isolated payment rail services for blockchain interactions.
