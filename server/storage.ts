@@ -134,10 +134,12 @@ export class MemStorage implements IStorage {
       id,
       amount: insertInvoice.amount,
       currency: insertInvoice.currency,
+      asset: insertInvoice.asset,
       description: insertInvoice.description,
       paymentAddress: insertInvoice.paymentAddress,
       status: "pending",
       createdAt: now,
+      updatedAt: now,
       paidAt: null,
       expiresAt: insertInvoice.expiresAt ? new Date(insertInvoice.expiresAt) : null,
       railType: (insertInvoice as any).railType || null,
@@ -187,6 +189,7 @@ export class MemStorage implements IStorage {
     const updatedInvoice: Invoice = {
       ...invoice,
       status,
+      updatedAt: new Date(),
       paidAt: paidAt || invoice.paidAt,
     };
 
@@ -462,6 +465,7 @@ export class DatabaseStorage implements IStorage {
       .values({
         amount: insertInvoice.amount,
         currency: insertInvoice.currency,
+        asset: insertInvoice.asset,
         description: insertInvoice.description,
         paymentAddress: insertInvoice.paymentAddress,
         expiresAt: insertInvoice.expiresAt ? new Date(insertInvoice.expiresAt) : null,

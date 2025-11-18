@@ -7,10 +7,12 @@ export const invoices = pgTable("invoices", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   amount: decimal("amount", { precision: 18, scale: 8 }).notNull(),
   currency: varchar("currency", { length: 10 }).notNull(),
+  asset: varchar("asset", { length: 10 }).notNull(),
   description: text("description").notNull(),
   paymentAddress: text("payment_address").notNull(),
   status: varchar("status", { length: 20 }).notNull().default("pending"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
   paidAt: timestamp("paid_at"),
   expiresAt: timestamp("expires_at"),
   railType: varchar("rail_type", { length: 20 }),
@@ -23,11 +25,13 @@ export const invoices = pgTable("invoices", {
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({
   id: true,
   createdAt: true,
+  updatedAt: true,
   paidAt: true,
   status: true,
 }).extend({
   amount: z.string().regex(/^\d+(\.\d{1,8})?$/, "Invalid amount format"),
   currency: z.enum(["BTC", "Lightning", "XMR"]),
+  asset: z.enum(["BTC", "XMR"]),
   description: z.string().min(1, "Description is required"),
 });
 

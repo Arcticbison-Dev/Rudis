@@ -414,7 +414,7 @@ async function performDataRetentionCleanup() {
         results.deleted++;
       }
       // Anonymize paid invoices older than RETENTION_PAID_DAYS
-      else if (invoice.status === "paid" && invoiceAge > RETENTION_PAID_DAYS) {
+      else if (invoice.status === "confirmed" && invoiceAge > RETENTION_PAID_DAYS) {
         // Check if already anonymized (description starts with [Anonymized])
         if (!invoice.description.startsWith("[Anonymized")) {
           // Use salted hash for payment address anonymization
@@ -661,9 +661,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create invoice first (generates ID, stores with placeholder address)
       // Note: Database uses "Lightning", API uses "LN"
+      // Compute asset from rail: LN → BTC, others map directly
+      const asset = rail === "LN" ? "BTC" : rail;
+      
       const invoice = await storage.createInvoice({
         amount: amount_atomic,
         currency: railToCurrency(rail),
+        asset,
         paymentAddress: "pending", // Placeholder, will be updated
         description: metadata?.description || `Payment via ${rail}`,
       });
@@ -925,7 +929,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Idempotent: ignore if already paid
-      if (invoice.status === "paid") {
+      if (invoice.status === "confirmed") {
         console.log(JSON.stringify({ invoiceId, rail: "ln", event: "settled", status: "already_paid" }));
         return res.json({ message: "Invoice already paid" });
       }
@@ -942,7 +946,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         confirmations,
       });
 
-      await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
+      await storage.updateInvoiceStatus(invoiceId, "confirmed", new Date());
       
       console.log(JSON.stringify({ invoiceId, rail: "ln", event: "settled", status: "confirmed" }));
       
@@ -954,7 +958,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
-          status: "paid",
+          status: "confirmed",
           amount: updatedInvoice!.amount,
           currency: updatedInvoice!.currency,
           timestamp: new Date().toISOString(),
@@ -982,7 +986,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Idempotent: ignore if already paid
-      if (invoice.status === "paid") {
+      if (invoice.status === "confirmed") {
         console.log(JSON.stringify({ invoiceId, rail: "btc", event: "confirmed", status: "already_paid" }));
         return res.json({ message: "Invoice already paid" });
       }
@@ -1000,7 +1004,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         blockHeight,
       });
 
-      await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
+      await storage.updateInvoiceStatus(invoiceId, "confirmed", new Date());
       
       console.log(JSON.stringify({ invoiceId, rail: "btc", event: "confirmed", status: "confirmed" }));
       
@@ -1012,7 +1016,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
-          status: "paid",
+          status: "confirmed",
           amount: updatedInvoice!.amount,
           currency: updatedInvoice!.currency,
           timestamp: new Date().toISOString(),
@@ -1040,7 +1044,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Idempotent: ignore if already paid
-      if (invoice.status === "paid") {
+      if (invoice.status === "confirmed") {
         console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "already_paid" }));
         return res.json({ message: "Invoice already paid" });
       }
@@ -1058,7 +1062,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         blockHeight,
       });
 
-      await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
+      await storage.updateInvoiceStatus(invoiceId, "confirmed", new Date());
       
       console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "confirmed" }));
       
@@ -1070,7 +1074,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
-          status: "paid",
+          status: "confirmed",
           amount: updatedInvoice!.amount,
           currency: updatedInvoice!.currency,
           timestamp: new Date().toISOString(),
@@ -1100,7 +1104,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Invoice not found" });
       }
 
-      if (invoice.status === "paid") {
+      if (invoice.status === "confirmed") {
         console.log(`Invoice ${invoiceId} already paid, skipping`);
         return res.json({ message: "Invoice already paid" });
       }
@@ -1377,7 +1381,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ error: "Invoice not found" });
       }
 
-      if (invoice.status === "paid") {
+      if (invoice.status === "confirmed") {
         // Block simulation if already paid by a real rail
         if (invoice.paymentSource && invoice.paymentSource !== "simulate") {
           return res.status(400).json({ 
@@ -1439,7 +1443,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Only allow anonymization of paid or expired invoices (protect active pending invoices)
-      if (invoice.status !== "paid" && invoice.status !== "expired") {
+      if (invoice.status === "confirmed" && invoice.status !== "expired") {
         return res.status(400).json({
           error: "Invalid invoice status",
           message: "Only paid or expired invoices can be anonymized"
