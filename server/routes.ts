@@ -397,6 +397,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.error("╚═══════════════════════════════════════════════════════════╝");
     throw new Error("ALT_WEBHOOK_SECRET required when ALTOSTRATUS_WEBHOOK_URL is configured");
   }
+
+  // Initialize payment orchestrator
+  const orchestrator = getOrchestrator();
+  const enabledCurrencies = orchestrator.getEnabledCurrencies();
+  console.log(`╔═══════════════════════════════════════════════════════════╗`);
+  console.log(`║      Payment Orchestrator Initialized                    ║`);
+  console.log(`╠═══════════════════════════════════════════════════════════╣`);
+  console.log(`║ Enabled rails: ${enabledCurrencies.length > 0 ? enabledCurrencies.join(", ") : "NONE"}${" ".repeat(Math.max(0, 37 - (enabledCurrencies.length > 0 ? enabledCurrencies.join(", ").length : 4)))}║`);
+  console.log(`╚═══════════════════════════════════════════════════════════╝`);
   
   // Log configuration status
   console.log("╔═══════════════════════════════════════════════════════════╗");
@@ -548,100 +557,77 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Create new invoice
+  // Create new invoice (using unified payment orchestrator)
   app.post("/api/invoices", createInvoiceLimiter, async (req, res) => {
     try {
       const validatedData = insertInvoiceSchema.parse(req.body);
       
-      // Check if the requested currency rail is enabled
-      if (validatedData.currency === "Lightning" && !ENABLE_LN) {
+      // Map currency names to orchestrator format
+      const currencyMap: Record<string, "BTC" | "XMR" | "LN"> = {
+        "BTC": "BTC",
+        "XMR": "XMR",
+        "Lightning": "LN",
+      };
+      const currency = currencyMap[validatedData.currency];
+      
+      if (!currency) {
         return res.status(400).json({ 
-          error: "rail_disabled",
-          message: "Lightning Network payments are currently disabled"
+          error: "unsupported_currency",
+          message: `Currency ${validatedData.currency} is not supported`
         });
       }
-      if (validatedData.currency === "BTC" && !ENABLE_BTC) {
+
+      // Check if currency is enabled via orchestrator
+      if (!orchestrator.isCurrencyEnabled(currency)) {
         return res.status(400).json({ 
           error: "rail_disabled",
-          message: "Bitcoin on-chain payments are currently disabled"
-        });
-      }
-      if (validatedData.currency === "XMR" && !ENABLE_XMR) {
-        return res.status(400).json({ 
-          error: "rail_disabled",
-          message: "Monero payments are currently disabled"
+          message: `${validatedData.currency} payments are currently disabled`
         });
       }
       
       // Create invoice first (will have placeholder address)
       const invoice = await storage.createInvoice(validatedData);
       
-      // For BTC invoices, get real address from rail-btc service
-      if (validatedData.currency === "BTC" && ENABLE_BTC) {
-        try {
-          const btcResponse = await axios.post(
-            `${BTC_SERVICE_URL}/create`,
-            {
-              invoiceId: invoice.id,
-              amountSats: invoice.amount,
-            },
-            {
-              timeout: 10000,
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${RAIL_AUTH_TOKEN}`,
-              },
-            }
-          );
+      // Get payment address from orchestrator
+      try {
+        const paymentRequest = {
+          invoiceId: invoice.id,
+          amountAtomic: invoice.amount,
+        };
 
-          // Validate response schema
-          if (!btcResponse.data || !btcResponse.data.address) {
-            // Silent error - invalid response from rail service
-            return res.status(500).json({ 
-              error: "Bitcoin address derivation failed",
-              details: "Invalid response from Bitcoin rail service"
-            });
-          }
+        const payment = await orchestrator.createPayment(currency, paymentRequest);
 
-          // Validate address format (basic check for native segwit prefix)
-          const address = btcResponse.data.address;
-          const isValidFormat = address.startsWith("bc1") || address.startsWith("tb1");
-          
-          if (!isValidFormat) {
-            // Silent error - invalid address format (operational detail)
-            // Don't delete invoice - just return error
-            return res.status(500).json({ 
-              error: "Bitcoin address derivation failed",
-              details: "Invalid address format received (expected native segwit bc1/tb1)"
-            });
-          }
-
-          // Update invoice with real Bitcoin address
-          await storage.updateInvoice(invoice.id, {
-            paymentAddress: address,
-          });
-          invoice.paymentAddress = address;
-          
-          console.log(JSON.stringify({
-            invoiceId: invoice.id,
-            rail: "btc",
-            event: "address_created"
-          }));
-        } catch (error: any) {
-          // Silent error - address derivation failed (operational detail)
-          
-          // Return error - invoice exists but has no valid payment address
-          return res.status(500).json({ 
-            error: "Bitcoin address derivation failed",
-            details: "Address derivation failed",
-            hint: "Check if rail-btc service is running and configured correctly"
+        // Update invoice with real payment address
+        await storage.updateInvoice(invoice.id, {
+          paymentAddress: payment.paymentAddress,
+        });
+        invoice.paymentAddress = payment.paymentAddress;
+        
+        console.log(JSON.stringify({
+          invoiceId: invoice.id,
+          rail: currency.toLowerCase(),
+          event: "address_created"
+        }));
+      } catch (error: any) {
+        // Handle orchestrator errors
+        if (error.code === "RAIL_UNAVAILABLE") {
+          return res.status(503).json({ 
+            error: "Payment rail unavailable",
+            details: error.message,
+            hint: `Check if ${currency} rail service is running and configured correctly`
           });
         }
+        
+        // Silent error - address derivation failed
+        return res.status(500).json({ 
+          error: "Payment address generation failed",
+          details: error.message,
+        });
       }
       
       console.log(JSON.stringify({
         invoiceId: invoice.id,
-        rail: invoice.currency.toLowerCase(),
+        rail: currency.toLowerCase(),
         event: "invoice_created"
       }));
       res.status(201).json(invoice);
