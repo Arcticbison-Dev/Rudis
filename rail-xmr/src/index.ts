@@ -7,12 +7,19 @@ import { MoneroRpcClient } from "./monero-rpc.js";
 
 config();
 
-const app = express();
-app.use(express.json());
-
-// Environment configuration
-const PORT = parseInt(process.env.PORT || "5003", 10);
+// SECURITY: Fail-fast validation BEFORE any initialization (same pattern as rail-btc)
 const RAIL_AUTH_TOKEN = process.env.RAIL_AUTH_TOKEN || "";
+if (!RAIL_AUTH_TOKEN || RAIL_AUTH_TOKEN.length === 0) {
+  console.error("╔═══════════════════════════════════════════════════════════╗");
+  console.error("║ FATAL: RAIL_AUTH_TOKEN not set                           ║");
+  console.error("║ This service cannot run without authentication           ║");
+  console.error("║ Set RAIL_AUTH_TOKEN in environment before starting       ║");
+  console.error("╚═══════════════════════════════════════════════════════════╝");
+  process.exit(1);
+}
+
+// Environment configuration (after validation)
+const PORT = parseInt(process.env.PORT || "5003", 10);
 const PAYMENTS_SERVICE_URL = process.env.PAYMENTS_SERVICE_URL || "http://localhost:5000";
 
 // Monero Wallet RPC configuration
@@ -24,7 +31,11 @@ const XMR_ACCOUNT_INDEX = parseInt(process.env.XMR_ACCOUNT_INDEX || "0", 10);
 const XMR_CONFIRMATIONS_REQUIRED = parseInt(process.env.XMR_CONFIRMATIONS_REQUIRED || "10", 10);
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || "30000", 10);
 
-// Initialize storage and RPC client
+// Initialize Express app and middleware
+const app = express();
+app.use(express.json());
+
+// Initialize storage and RPC client (after validation)
 const storage = new XmrStorage();
 const moneroRpc = new MoneroRpcClient({
   host: XMR_RPC_HOST,
@@ -141,9 +152,15 @@ async function monitorSubaddresses() {
         const amountAtomic = transfer.amount.toString();
         const blockHeight = transfer.height;
 
-        const currentState = state.state;
+        let currentState = state.state;
 
         // STATE MACHINE: unseen → pending → confirmed → settled
+        // IMPORTANT: Reload state after each transition to prevent race conditions
+
+        // IDEMPOTENCY GUARD: Skip if already settled
+        if (currentState === "settled") {
+          continue;
+        }
 
         // Transition: unseen → pending (transaction appears in mempool)
         if (currentState === "unseen" && transfers.in.length > 0) {
@@ -161,7 +178,10 @@ async function monitorSubaddresses() {
             event: "tx_seen"
           }));
 
-          continue;
+          // Reload state after transition
+          const reloadedState = storage.getPaymentState(state.invoiceId);
+          if (!reloadedState) continue;
+          currentState = reloadedState.state;
         }
 
         // Update confirmations for pending/confirmed states
@@ -185,27 +205,31 @@ async function monitorSubaddresses() {
             event: "confirmed"
           }));
 
-          // Don't continue - let it proceed to settled transition
+          // Reload state after transition
+          const reloadedState = storage.getPaymentState(state.invoiceId);
+          if (!reloadedState) continue;
+          currentState = reloadedState.state;
         }
 
-        // Transition: confirmed → settled (after successful callback)
+        // Transition: confirmed → settled (only if confirmed or pending with enough confirmations)
         if (currentState === "confirmed" || 
             (currentState === "pending" && confirmations >= XMR_CONFIRMATIONS_REQUIRED)) {
           
-          // Callback to payments service
+          // Mark as settled BEFORE callback (prevents duplicate callbacks on retry)
+          storage.updatePaymentState(state.invoiceId, {
+            state: "settled",
+            confirmations: confirmations.toString(),
+            paidAt: new Date(),
+          });
+
+          // Callback to payments service (fire-and-forget after state persisted)
+          // If callback fails, state remains settled, preventing duplicate attempts
           await callbackPaymentsService(
             state.invoiceId,
             txid,
             confirmations,
             blockHeight
           );
-
-          // Mark as settled
-          storage.updatePaymentState(state.invoiceId, {
-            state: "settled",
-            confirmations: confirmations.toString(),
-            paidAt: new Date(),
-          });
         }
       } catch (error: any) {
         // Silent error - will retry on next interval
