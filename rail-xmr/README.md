@@ -85,8 +85,8 @@ PAYMENTS_SERVICE_URL=http://localhost:5000
 # Monero Wallet RPC Configuration
 XMR_RPC_HOST=127.0.0.1
 XMR_RPC_PORT=18082
-XMR_RPC_USERNAME=                               # Optional
-XMR_RPC_PASSWORD=                               # Optional
+XMR_RPC_USERNAME=your-rpc-username-here         # REQUIRED
+XMR_RPC_PASSWORD=your-rpc-password-here         # REQUIRED
 XMR_ACCOUNT_INDEX=0
 
 # Blockchain Configuration
@@ -122,7 +122,7 @@ monero-wallet-rpc \
   --password "" \
   --rpc-bind-port 18082 \
   --daemon-address node.moneroworld.com:18089 \
-  --disable-rpc-login \
+  --rpc-login username:password \
   --confirm-external-bind
 ```
 

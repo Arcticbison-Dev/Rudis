@@ -36,6 +36,16 @@ const PAYMENTS_SERVICE_URL = process.env.PAYMENTS_SERVICE_URL || "http://localho
 const XMR_RPC_PORT_NUM = parseInt(XMR_RPC_PORT, 10);
 const XMR_RPC_USERNAME = process.env.XMR_RPC_USERNAME || "";
 const XMR_RPC_PASSWORD = process.env.XMR_RPC_PASSWORD || "";
+
+// SECURITY: Require RPC authentication (prevent unauthenticated wallet access)
+if (!XMR_RPC_USERNAME || !XMR_RPC_PASSWORD) {
+  console.error("╔═══════════════════════════════════════════════════════════╗");
+  console.error("║ FATAL: XMR_RPC_USERNAME and XMR_RPC_PASSWORD required    ║");
+  console.error("║ Monero Wallet RPC MUST be protected with authentication  ║");
+  console.error("║ Set credentials in environment before starting           ║");
+  console.error("╚═══════════════════════════════════════════════════════════╝");
+  process.exit(1);
+}
 const XMR_ACCOUNT_INDEX = parseInt(process.env.XMR_ACCOUNT_INDEX || "0", 10);
 const XMR_CONFIRMATIONS_REQUIRED = parseInt(process.env.XMR_CONFIRMATIONS_REQUIRED || "10", 10);
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || "30000", 10);
