@@ -102,6 +102,15 @@ export class BtcAdapter implements RailAdapter {
 
   /**
    * Get payment status from BTC rail
+   * 
+   * NOTE: This method queries the rail service directly (makes fresh blockchain RPC calls).
+   * The orchestrator's getPaymentStatus() does NOT call this - it reads from database instead.
+   * This method is kept for:
+   * - Direct debugging/troubleshooting
+   * - Manual status verification
+   * - Potential future use cases
+   * 
+   * Production flow: Workers poll → Update DB via callbacks → Orchestrator reads DB
    */
   async getPaymentStatus(invoiceId: string): Promise<RailPaymentStatus> {
     try {

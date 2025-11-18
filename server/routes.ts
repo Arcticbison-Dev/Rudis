@@ -1443,7 +1443,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Only allow anonymization of paid or expired invoices (protect active pending invoices)
-      if (invoice.status === "confirmed" && invoice.status !== "expired") {
+      if (invoice.status !== "confirmed" && invoice.status !== "expired") {
         return res.status(400).json({
           error: "Invalid invoice status",
           message: "Only paid or expired invoices can be anonymized"

@@ -147,7 +147,7 @@ async function checkAddress(address: string): Promise<{
             timeout: 10000,
           });
           const tipHeight = tipResponse.data;
-          confirmations = tipHeight - blockHeight + 1;
+          confirmations = (blockHeight && tipHeight) ? tipHeight - blockHeight + 1 : 0;
         }
 
         return {
