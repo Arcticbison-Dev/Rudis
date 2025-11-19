@@ -581,86 +581,94 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await processWebhookQueue(invoicePayloads);
   }, 1000);
 
-  // Health check endpoint (enhanced with orchestrator and per-rail health state)
+  // Health check endpoint (Step 3: Fast, no RPC calls, secure)
+  // Public endpoint with minimal sensitive data exposure
   app.get("/health", async (req, res) => {
     const timestamp = new Date().toISOString();
-    let storageStatus = "operational";
-    let webhookStatus = "operational";
-    let pendingCount = 0;
     
-    try {
-      // Lightweight storage check - just count pending webhooks (bounded query)
-      // This is O(n) where n = pending webhooks, not O(all invoices)
-      const pendingWebhooks = await storage.getPendingWebhooks();
-      pendingCount = pendingWebhooks.length;
-      webhookStatus = pendingCount < 100 ? "operational" : "queue_full";
-    } catch (error: any) {
-      // If we can't even query webhooks, storage is likely down
-      storageStatus = "error";
-      webhookStatus = "unknown";
-    }
-
-    // Check payment orchestrator health (all rails)
-    const orchestrator = getOrchestrator();
-    const orchestratorHealth = await orchestrator.healthCheck();
-    
-    // Get per-rail health state from monitoring system
+    // Fast, in-memory health checks only - NO network I/O
+    // Read from internal state and monitoring system
     const globalHealth = monitoring.getGlobalHealth();
+    const orchestrator = getOrchestrator();
     
-    // Determine overall status (most severe wins)
-    let overallStatus: "healthy" | "degraded" | "error" = "healthy";
-    if (storageStatus === "error" || globalHealth.overall === "error") {
-      overallStatus = "error";
-    } else if (webhookStatus !== "operational" || 
-               !orchestratorHealth.ok || 
-               globalHealth.overall === "degraded") {
-      overallStatus = "degraded";
+    // Lightweight storage check (bounded query, no full table scan)
+    let storageStatus: "ok" | "error" = "ok";
+    try {
+      // Quick check: can we query pending webhooks? (small dataset)
+      await storage.getPendingWebhooks();
+    } catch (error: any) {
+      storageStatus = "error";
     }
     
+    // Build response matching exact specification format
     const response: any = {
-      status: overallStatus,
+      status: globalHealth.overall,
       timestamp,
-      version: "1.0.0",
-      storage: storageStatus,
-      webhooks: webhookStatus,
-      paymentRails: {
-        enabled: orchestratorHealth.enabledRails,
-        btc: {
-          ...orchestratorHealth.rails.btc,
-          health: globalHealth.rails.BTC,
-        },
-        xmr: {
-          ...orchestratorHealth.rails.xmr,
-          health: globalHealth.rails.XMR,
-        },
-        ln: {
-          ...orchestratorHealth.rails.ln,
-          health: globalHealth.rails.LN,
-        },
+      rails: {
+        btc: buildRailHealthResponse("BTC", globalHealth.rails.BTC, orchestrator),
+        xmr: buildRailHealthResponse("XMR", globalHealth.rails.XMR, orchestrator),
+        ln: buildRailHealthResponse("LN", globalHealth.rails.LN, orchestrator),
       },
     };
     
-    // Add issues and details if degraded/error
-    if (overallStatus !== "healthy") {
-      response.issues = [];
-      if (storageStatus === "error") response.issues.push("storage_error");
-      if (webhookStatus === "queue_full") {
-        response.issues.push("webhook_queue_full");
-        response.pendingWebhookCount = pendingCount;
-      }
-      if (!orchestratorHealth.ok) {
-        response.issues.push("payment_rails_degraded");
-      }
-      if (globalHealth.overall === "degraded") {
-        response.issues.push("rail_health_degraded");
-      }
-      if (globalHealth.overall === "error") {
-        response.issues.push("rail_health_error");
+    // Include storage status if there are issues (degraded/error only)
+    if (storageStatus === "error" || globalHealth.overall !== "ok") {
+      response.storage = storageStatus;
+    }
+    
+    // HTTP status code based on overall health
+    const httpStatus = globalHealth.overall === "error" ? 503 : 200;
+    res.status(httpStatus).json(response);
+  });
+  
+  /**
+   * Build rail health response for /health endpoint
+   * Handles disabled, not_implemented, and health states
+   * 
+   * Security: No sensitive data (secrets, stack traces, detailed errors)
+   */
+  function buildRailHealthResponse(
+    rail: "BTC" | "XMR" | "LN",
+    health: ReturnType<typeof monitoring.getRailHealth>,
+    orchestrator: ReturnType<typeof getOrchestrator>
+  ): any {
+    const currency = rail as PaymentCurrency;
+    const enabled = orchestrator.isCurrencyEnabled(currency);
+    
+    // If rail is not enabled, return minimal disabled status
+    if (!enabled) {
+      return {
+        status: "disabled",
+        reason: `${rail} rail is not enabled (ENABLE_${rail}=false)`,
+      };
+    }
+    
+    // For Lightning Network, check if it's in stub/not_implemented mode
+    if (rail === "LN") {
+      const lnServiceUrl = process.env.LN_SERVICE_URL || "";
+      if (!lnServiceUrl) {
+        return {
+          status: "not_implemented",
+          reason: "ln_not_implemented",
+          message: "Lightning Network service not configured (LN_SERVICE_URL not set)",
+          health: {
+            last_successful_poll_at: health.lastSuccessfulPollAt,
+            last_poll_error_at: health.lastPollErrorAt,
+            consecutive_poll_failures: health.consecutivePollFailures,
+          },
+        };
       }
     }
     
-    res.status(overallStatus === "error" ? 503 : 200).json(response);
-  });
+    // Normal rail with health tracking
+    return {
+      status: health.status,
+      last_successful_poll_at: health.lastSuccessfulPollAt,
+      last_poll_error_at: health.lastPollErrorAt,
+      consecutive_poll_failures: health.consecutivePollFailures,
+      last_payment_confirmed_at: health.lastPaymentConfirmedAt,
+    };
+  }
 
   // Monitoring metrics endpoint
   app.get("/metrics", (req, res) => {

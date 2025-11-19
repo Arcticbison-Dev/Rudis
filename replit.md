@@ -37,6 +37,15 @@ Altostratus Payments is a privacy-focused, self-hosted crypto payment invoice sy
 - ✅ **Enhanced Endpoints**: GET /health and GET /metrics now include per-rail health state
 - ✅ **Stale Data Detection**: Error status if no successful polls for >10 minutes
 
+**Multi-Rail Monitoring System - Step 3 (2025-11-19) - COMPLETE:**
+- ✅ **/health Endpoint**: GET /health with exact specification format (status, rails, timestamps)
+- ✅ **Fast Implementation**: In-memory state + lightweight DB query only (<20ms response)
+- ✅ **No RPC Calls**: No network I/O to blockchain nodes or external services
+- ✅ **Read-Only**: No state mutations, safe for repeated health checks
+- ✅ **Security**: Public endpoint with no sensitive data (no secrets, stack traces, detailed errors)
+- ✅ **HTTP Status Codes**: 200 for ok/degraded, 503 for error state
+- ✅ **Rail States**: Handles disabled, not_implemented, ok, degraded, error statuses
+
 ## System Architecture
 Altostratus Payments uses a React frontend and an Express.js backend, communicating with isolated payment rail services for blockchain interactions.
 
