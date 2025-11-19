@@ -86,6 +86,13 @@ Altostratus Payments is a privacy-focused, self-hosted crypto payment invoice sy
 - ✅ **Security Posture**: Strong auth, no PII, no secrets in logs, public endpoints safe by design
 - ✅ **Documentation**: Comprehensive STEP7_SECURITY_PRIVACY.md with compliance notes, best practices, incident response
 
+**Testing & Failure Drills - Step 8 (2025-11-19) - COMPLETE:**
+- ✅ **8.1 Rail RPC Failure**: Test procedures for simulating XMR RPC failures, verifying poll_failed logs, consecutive_poll_failures increments, /health degraded/error status, alert triggers
+- ✅ **8.2 Rail Recovery**: Test procedures for restoring XMR config, verifying poll success, failure counter reset, /health ok status, rail.recovered event
+- ✅ **8.3 Payment Lifecycle**: Complete BTC and XMR test procedures (pending → confirmed), transaction detection, confirmation tracking, database updates, payment.confirmed logging, admin endpoint verification
+- ✅ **8.4 LN Stub Behavior**: Test procedures for LN not_implemented errors, payment.create_failed logging, /health not_implemented status with clear reason
+- ✅ **Documentation**: Comprehensive STEP8_TESTING_DRILLS.md (~900 lines) with test procedures, verification checklists, expected outputs, troubleshooting, automation templates
+
 ## System Architecture
 Altostratus Payments uses a React frontend and an Express.js backend, communicating with isolated payment rail services for blockchain interactions.
 
