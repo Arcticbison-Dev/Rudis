@@ -15,6 +15,7 @@ export const invoices = pgTable("invoices", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
   paidAt: timestamp("paid_at"),
   expiresAt: timestamp("expires_at"),
+  amountPaidAtomic: varchar("amount_paid_atomic", { length: 20 }),
   railType: varchar("rail_type", { length: 20 }),
   bolt11Invoice: text("bolt11_invoice"),
   derivedAddress: text("derived_address"),
