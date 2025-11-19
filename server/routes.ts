@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertInvoiceSchema, insertTemplateSchema, paymentConfirmationSchema } from "@shared/schema";
+import { insertInvoiceSchema, insertTemplateSchema, paymentConfirmationSchema, type Invoice } from "@shared/schema";
 import { paymentConfirmationSchema as legacyPaymentConfirmationSchema } from "@shared/webhook-schema";
 import axios, { AxiosError } from "axios";
 import crypto from "crypto";
@@ -761,16 +761,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Get all invoices (we'll filter in memory for MVP)
       // In production, this should use database queries with WHERE clauses
-      let invoices = await storage.listInvoices();
+      let invoices: Invoice[] = await storage.getAllInvoices();
       
       // Apply filters
       if (rail) {
         const dbCurrency = railToCurrency(rail.toUpperCase() as "BTC" | "XMR" | "LN");
-        invoices = invoices.filter(inv => inv.currency === dbCurrency);
+        invoices = invoices.filter((inv: Invoice) => inv.currency === dbCurrency);
       }
       
       if (status) {
-        invoices = invoices.filter(inv => inv.status.toLowerCase() === status.toLowerCase());
+        invoices = invoices.filter((inv: Invoice) => inv.status.toLowerCase() === status.toLowerCase());
       }
       
       if (created_after) {
@@ -781,7 +781,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             message: "created_after must be a valid ISO 8601 timestamp"
           });
         }
-        invoices = invoices.filter(inv => new Date(inv.createdAt) >= afterDate);
+        invoices = invoices.filter((inv: Invoice) => new Date(inv.createdAt) >= afterDate);
       }
       
       if (created_before) {
@@ -792,11 +792,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             message: "created_before must be a valid ISO 8601 timestamp"
           });
         }
-        invoices = invoices.filter(inv => new Date(inv.createdAt) <= beforeDate);
+        invoices = invoices.filter((inv: Invoice) => new Date(inv.createdAt) <= beforeDate);
       }
       
       // Sort by creation date (newest first)
-      invoices.sort((a, b) => 
+      invoices.sort((a: Invoice, b: Invoice) => 
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
       );
       
@@ -806,7 +806,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const paginatedInvoices = invoices.slice(offset, offset + limit);
       
       // Format response (Step 5.2: Invoice list view)
-      const formattedInvoices = paginatedInvoices.map(inv => {
+      const formattedInvoices = paginatedInvoices.map((inv: Invoice) => {
         const rail = currencyToRail(inv.currency);
         
         const result: any = {
@@ -854,6 +854,135 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({
         error: "internal_error",
         message: "Failed to fetch invoices"
+      });
+    }
+  });
+
+  /**
+   * GET /admin/invoices/:id - Get invoice detail with transactions (Step 6.1: Invoice detail endpoint)
+   * 
+   * Protected by ADMIN_API_TOKEN for security
+   * 
+   * Returns:
+   * - Complete invoice details (Step 6.1)
+   * - All payment transactions (Step 6.2: Linked payment_transactions)
+   * - BTC payment state (if BTC rail) - for debugging (Step 6.3)
+   * - Debug information: last_checked, confirmations, errors
+   * 
+   * Response format:
+   * {
+   *   invoice: { id, rail, asset, amount_atomic, status, ... },
+   *   transactions: [ { tx_hash, rail, amount_atomic, confirmations, ... } ],
+   *   payment_state: { state, txid, confirmations, last_checked, ... } // BTC only
+   * }
+   */
+  app.get("/admin/invoices/:id", authenticateAdminApi, async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      // Get invoice
+      const invoice = await storage.getInvoice(id);
+      if (!invoice) {
+        return res.status(404).json({
+          error: "invoice_not_found",
+          message: `Invoice ${id} not found`
+        });
+      }
+      
+      // Convert currency to rail
+      const rail = currencyToRail(invoice.currency);
+      
+      // Build base invoice response (Step 6.1: All invoice fields)
+      const invoiceResponse: any = {
+        id: invoice.id,
+        rail: rail.toLowerCase(),
+        asset: invoice.asset,
+        amount_atomic: invoice.amount,
+        status: invoice.status,
+        created_at: invoice.createdAt,
+        updated_at: invoice.updatedAt,
+      };
+      
+      // Add rail-specific fields (Step 6.1)
+      if (rail === "BTC" || rail === "XMR") {
+        invoiceResponse.address = invoice.paymentAddress;
+      }
+      
+      if (rail === "LN" && invoice.bolt11Invoice) {
+        invoiceResponse.invoice_bolt11 = invoice.bolt11Invoice;
+      }
+      
+      // Add optional fields
+      if (invoice.paidAt) {
+        invoiceResponse.paid_at = invoice.paidAt;
+      }
+      if (invoice.expiresAt) {
+        invoiceResponse.expires_at = invoice.expiresAt;
+      }
+      if (invoice.amountPaidAtomic) {
+        invoiceResponse.amount_paid_atomic = invoice.amountPaidAtomic;
+      }
+      if (invoice.description) {
+        invoiceResponse.description = invoice.description;
+      }
+      if (invoice.railType) {
+        invoiceResponse.rail_type = invoice.railType;
+      }
+      
+      // Get payment transactions (Step 6.2: Linked payment_transactions)
+      const transactions = await storage.getPaymentTransactionsByInvoice(id);
+      const formattedTransactions = transactions.map(tx => ({
+        id: tx.id,
+        tx_hash: tx.transactionId, // tx_hash for clarity
+        tx_ref: tx.transactionId, // also provide tx_ref
+        rail: tx.rail?.toLowerCase() || rail.toLowerCase(),
+        amount_atomic: invoice.amount, // Use invoice amount as transaction amount
+        confirmations: parseInt(tx.confirmations || "0", 10),
+        block_height: tx.blockHeight ? parseInt(tx.blockHeight, 10) : undefined,
+        first_seen_at: tx.confirmedAt, // When transaction was first recorded
+        confirmed_at: tx.confirmedAt,
+      }));
+      
+      // Build response
+      const response: any = {
+        invoice: invoiceResponse,
+        transactions: formattedTransactions,
+      };
+      
+      // Add BTC payment state for debugging (Step 6.3: Debug usefulness)
+      if (rail === "BTC") {
+        const btcState = await storage.getBtcPaymentState(id);
+        if (btcState) {
+          response.payment_state = {
+            state: btcState.state, // unseen, pending, confirmed, settled
+            txid: btcState.txid || null,
+            confirmations: btcState.confirmations ? parseInt(btcState.confirmations, 10) : 0,
+            block_height: btcState.blockHeight ? parseInt(btcState.blockHeight, 10) : undefined,
+            amount_sats: btcState.amountSats ? parseInt(btcState.amountSats, 10) : undefined,
+            last_checked: btcState.lastChecked, // Step 6.3: Has the worker been polling?
+            paid_at: btcState.paidAt,
+            created_at: btcState.createdAt,
+            updated_at: btcState.updatedAt,
+          };
+          
+          // Step 6.3: Debug usefulness - add summary flags
+          response.debug = {
+            has_been_seen_on_chain: btcState.state !== "unseen",
+            is_being_polled: btcState.lastChecked !== null,
+            time_since_last_check_ms: btcState.lastChecked 
+              ? Date.now() - new Date(btcState.lastChecked).getTime() 
+              : null,
+            needs_attention: btcState.state === "unseen" && Date.now() - new Date(invoice.createdAt).getTime() > 600000, // >10 min old but unseen
+          };
+        }
+      }
+      
+      res.json(response);
+    } catch (error: any) {
+      console.error("Error fetching admin invoice detail:", error);
+      res.status(500).json({
+        error: "internal_error",
+        message: "Failed to fetch invoice detail"
       });
     }
   });

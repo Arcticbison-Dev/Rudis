@@ -39,6 +39,12 @@ Authorization: Bearer <your_token_here>
 
 List all invoices with optional filtering and pagination.
 
+### GET /admin/invoices/:id
+
+Get detailed information for a specific invoice including transactions and debug info.
+
+**See [STEP6_ADMIN_INVOICE_DETAIL.md](./STEP6_ADMIN_INVOICE_DETAIL.md) for complete documentation.**
+
 #### Query Parameters
 
 | Parameter | Type | Description | Example |
