@@ -12,6 +12,15 @@ Altostratus Payments is a privacy-focused, self-hosted crypto payment invoice sy
 - Configurable timeouts and retention policies via environment variables
 - Security: Prevent re-use of expired invoice IDs
 
+## Recent Changes
+
+**Lightning Network Integration Tasks 1-5 (2025-11-19) - COMPLETE:**
+- ✅ **Task 1**: Data model verification - All 4 required LN fields present in schema and database
+- ✅ **Task 2**: Safe-stubbed LN adapter with controlled error handling and database-only fallback
+- ✅ **Task 3**: API behavior - POST /payments returns `ln_not_implemented` (503), GET supports DB-only reads
+- ✅ **Task 4**: Configuration surface for future LN backends (LND, CLN, LNbits, Eclair)
+- ✅ **Task 5**: Logging & monitoring hooks - Structured events with rail='ln', payment.create_failed event
+
 ## System Architecture
 Altostratus Payments uses a React frontend and an Express.js backend, communicating with isolated payment rail services for blockchain interactions.
 

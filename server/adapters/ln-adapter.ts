@@ -18,6 +18,7 @@ import {
   PaymentNotFoundError,
 } from "../../shared/payment-orchestrator";
 import { storage } from "../storage";
+import { logPaymentCreateFailed } from "../monitoring";
 
 /**
  * LN rail service response types (rail-specific)
@@ -217,6 +218,14 @@ export class LnAdapter implements RailAdapter {
   async createPayment(request: CreatePaymentRequest): Promise<CreatePaymentResponse> {
     // Safe-stub: Return controlled error if service not configured
     if (!this.serviceConfigured) {
+      // Log payment creation failure in stub mode with rail='ln'
+      logPaymentCreateFailed(
+        "LN",
+        request.invoiceId,
+        "ln_not_implemented",
+        "Lightning Network service (LN_SERVICE_URL) is not configured"
+      );
+      
       throw new RailUnavailableError("LN", {
         operation: "createPayment",
         reason: "ln_not_implemented",

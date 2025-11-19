@@ -21,6 +21,7 @@ export type Rail = "BTC" | "XMR" | "LN";
  */
 export type PaymentEvent = 
   | "payment.created"
+  | "payment.create_failed"  // Payment creation failed (e.g., stub mode, rail unavailable)
   | "payment.pending"
   | "payment.confirming"
   | "payment.confirmed"
@@ -388,6 +389,32 @@ export function getMetrics(): {
  */
 export function logPaymentCreated(rail: Rail, invoiceId: string, amount: string): void {
   logEvent("payment.created", rail, { invoiceId, amount });
+}
+
+/**
+ * Log payment creation failed
+ * 
+ * Used when payment creation fails due to:
+ * - Stub mode (rail not configured)
+ * - Rail service unavailable
+ * - Invalid request
+ * 
+ * @param rail - Payment rail (BTC, XMR, LN)
+ * @param invoiceId - Invoice ID (if created before failure)
+ * @param reason - Failure reason (e.g., "ln_not_implemented", "service_unavailable")
+ * @param details - Additional error details
+ */
+export function logPaymentCreateFailed(
+  rail: Rail,
+  invoiceId: string | undefined,
+  reason: string,
+  details?: string
+): void {
+  const metadata: Record<string, any> = { reason };
+  if (invoiceId) metadata.invoiceId = invoiceId;
+  if (details) metadata.details = details;
+  
+  logEvent("payment.create_failed", rail, metadata);
 }
 
 /**
