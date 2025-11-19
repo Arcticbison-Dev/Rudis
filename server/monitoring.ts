@@ -462,6 +462,205 @@ function cleanupEventBuffer(): void {
 setInterval(cleanupEventBuffer, CLEANUP_INTERVAL_MS);
 
 // ============================================================================
+// Per-Rail Health State Tracking
+// ============================================================================
+
+/**
+ * Health status levels
+ */
+export type HealthStatus = "ok" | "degraded" | "error";
+
+/**
+ * Per-rail health state
+ */
+interface RailHealthState {
+  /** Timestamp of last successful poll */
+  lastSuccessfulPollAt: number | null;
+  /** Timestamp of last poll error */
+  lastPollErrorAt: number | null;
+  /** Count of consecutive poll failures */
+  consecutivePollFailures: number;
+  /** Timestamp of last payment confirmation */
+  lastPaymentConfirmedAt: number | null;
+  /** Current health status */
+  status: HealthStatus;
+}
+
+/**
+ * Global health state for all rails
+ */
+const railHealthStates = new Map<Rail, RailHealthState>();
+
+/**
+ * Initialize health state for a rail
+ */
+function initializeRailHealth(rail: Rail): RailHealthState {
+  return {
+    lastSuccessfulPollAt: null,
+    lastPollErrorAt: null,
+    consecutivePollFailures: 0,
+    lastPaymentConfirmedAt: null,
+    status: "ok",
+  };
+}
+
+/**
+ * Get or initialize health state for a rail
+ */
+function getRailHealthState(rail: Rail): RailHealthState {
+  if (!railHealthStates.has(rail)) {
+    railHealthStates.set(rail, initializeRailHealth(rail));
+  }
+  return railHealthStates.get(rail)!;
+}
+
+/**
+ * Update health status based on current state
+ * 
+ * Rules:
+ * - ok: No consecutive failures, recent successful polls
+ * - degraded: Some failures but below alert threshold
+ * - error: Failures exceed threshold or no polls for extended period
+ */
+function updateRailHealthStatus(rail: Rail): void {
+  const state = getRailHealthState(rail);
+  const now = Date.now();
+  
+  // Configuration
+  const MAX_TIME_SINCE_POLL = 10 * 60 * 1000; // 10 minutes
+  const DEGRADED_THRESHOLD = 3; // Consecutive failures
+  const ERROR_THRESHOLD = 5; // Consecutive failures
+  
+  // Check if we haven't polled in a long time
+  const timeSinceLastPoll = state.lastSuccessfulPollAt 
+    ? now - state.lastSuccessfulPollAt 
+    : Infinity;
+  
+  if (timeSinceLastPoll > MAX_TIME_SINCE_POLL && state.lastSuccessfulPollAt !== null) {
+    state.status = "error";
+    return;
+  }
+  
+  // Check consecutive failures
+  if (state.consecutivePollFailures >= ERROR_THRESHOLD) {
+    state.status = "error";
+  } else if (state.consecutivePollFailures >= DEGRADED_THRESHOLD) {
+    state.status = "degraded";
+  } else if (state.consecutivePollFailures === 0) {
+    state.status = "ok";
+  } else {
+    // 1-2 failures: still ok but being monitored
+    state.status = "ok";
+  }
+}
+
+/**
+ * Record successful poll for a rail
+ */
+export function recordPollSuccess(rail: Rail): void {
+  const state = getRailHealthState(rail);
+  state.lastSuccessfulPollAt = Date.now();
+  state.consecutivePollFailures = 0;
+  updateRailHealthStatus(rail);
+}
+
+/**
+ * Record poll failure for a rail
+ */
+export function recordPollFailure(rail: Rail): void {
+  const state = getRailHealthState(rail);
+  state.lastPollErrorAt = Date.now();
+  state.consecutivePollFailures++;
+  updateRailHealthStatus(rail);
+}
+
+/**
+ * Record payment confirmation for a rail
+ */
+export function recordPaymentConfirmed(rail: Rail): void {
+  const state = getRailHealthState(rail);
+  state.lastPaymentConfirmedAt = Date.now();
+}
+
+/**
+ * Get health state for a specific rail
+ */
+export function getRailHealth(rail: Rail): {
+  rail: Rail;
+  status: HealthStatus;
+  lastSuccessfulPollAt: string | null;
+  lastPollErrorAt: string | null;
+  consecutivePollFailures: number;
+  lastPaymentConfirmedAt: string | null;
+} {
+  const state = getRailHealthState(rail);
+  
+  return {
+    rail,
+    status: state.status,
+    lastSuccessfulPollAt: state.lastSuccessfulPollAt 
+      ? new Date(state.lastSuccessfulPollAt).toISOString() 
+      : null,
+    lastPollErrorAt: state.lastPollErrorAt 
+      ? new Date(state.lastPollErrorAt).toISOString() 
+      : null,
+    consecutivePollFailures: state.consecutivePollFailures,
+    lastPaymentConfirmedAt: state.lastPaymentConfirmedAt 
+      ? new Date(state.lastPaymentConfirmedAt).toISOString() 
+      : null,
+  };
+}
+
+/**
+ * Get global health snapshot
+ * 
+ * Overall status derived from all rails:
+ * - ok: All rails are ok
+ * - degraded: At least one rail is degraded, none in error
+ * - error: At least one rail is in error state
+ */
+export function getGlobalHealth(): {
+  overall: HealthStatus;
+  rails: {
+    BTC: ReturnType<typeof getRailHealth>;
+    XMR: ReturnType<typeof getRailHealth>;
+    LN: ReturnType<typeof getRailHealth>;
+  };
+  timestamp: string;
+} {
+  const btcHealth = getRailHealth("BTC");
+  const xmrHealth = getRailHealth("XMR");
+  const lnHealth = getRailHealth("LN");
+  
+  // Determine overall status
+  let overall: HealthStatus = "ok";
+  
+  if (
+    btcHealth.status === "error" || 
+    xmrHealth.status === "error" || 
+    lnHealth.status === "error"
+  ) {
+    overall = "error";
+  } else if (
+    btcHealth.status === "degraded" || 
+    xmrHealth.status === "degraded" || 
+    lnHealth.status === "degraded"
+  ) {
+    overall = "degraded";
+  }
+  
+  return {
+    overall,
+    rails: {
+      BTC: btcHealth,
+      XMR: xmrHealth,
+      LN: lnHealth,
+    },
+    timestamp: new Date().toISOString(),
+  };
+}
+
+// ============================================================================
 // Metrics & Health
 // ============================================================================
 
@@ -473,6 +672,7 @@ export function getMetrics(): {
   activeAlerts: number;
   eventsByRail: Record<Rail, number>;
   eventsByType: Record<string, number>;
+  health: ReturnType<typeof getGlobalHealth>;
 } {
   const eventsByRail: Record<Rail, number> = { BTC: 0, XMR: 0, LN: 0 };
   const eventsByType: Record<string, number> = {};
@@ -489,6 +689,7 @@ export function getMetrics(): {
     activeAlerts: alertCooldowns.size,
     eventsByRail,
     eventsByType,
+    health: getGlobalHealth(),
   };
 }
 
@@ -537,6 +738,11 @@ export function logPaymentStatus(
   invoiceId: string,
   status: "pending" | "confirming" | "confirmed" | "expired"
 ): void {
+  // Record payment confirmation in health state
+  if (status === "confirmed") {
+    recordPaymentConfirmed(rail);
+  }
+  
   logEvent(`payment.${status}` as PaymentEvent, rail, { invoiceId });
 }
 
@@ -621,6 +827,9 @@ export function logPollCompleted(
   if (duration !== undefined) metadata.durationMs = duration;
   if (updatedCount !== undefined) metadata.updatedCount = updatedCount;
   
+  // Record successful poll in health state
+  recordPollSuccess(rail);
+  
   logEvent("poll.completed", rail, Object.keys(metadata).length > 0 ? metadata : undefined, "info");
 }
 
@@ -660,6 +869,9 @@ export function logPollFailed(rail: Rail, error?: string, errorStack?: string): 
       .map(line => line.trim())
       .join(" | ");
   }
+  
+  // Record poll failure in health state
+  recordPollFailure(rail);
   
   logEvent("poll.failed", rail, Object.keys(metadata).length > 0 ? metadata : undefined, "error");
 }

@@ -581,7 +581,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     await processWebhookQueue(invoicePayloads);
   }, 1000);
 
-  // Health check endpoint (enhanced with orchestrator)
+  // Health check endpoint (enhanced with orchestrator and per-rail health state)
   app.get("/health", async (req, res) => {
     const timestamp = new Date().toISOString();
     let storageStatus = "operational";
@@ -604,27 +604,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
     const orchestrator = getOrchestrator();
     const orchestratorHealth = await orchestrator.healthCheck();
     
-    const isHealthy = storageStatus === "operational" && 
-                      webhookStatus === "operational" && 
-                      orchestratorHealth.ok;
-    const status = isHealthy ? "healthy" : "degraded";
+    // Get per-rail health state from monitoring system
+    const globalHealth = monitoring.getGlobalHealth();
+    
+    // Determine overall status (most severe wins)
+    let overallStatus: "healthy" | "degraded" | "error" = "healthy";
+    if (storageStatus === "error" || globalHealth.overall === "error") {
+      overallStatus = "error";
+    } else if (webhookStatus !== "operational" || 
+               !orchestratorHealth.ok || 
+               globalHealth.overall === "degraded") {
+      overallStatus = "degraded";
+    }
     
     const response: any = {
-      status,
+      status: overallStatus,
       timestamp,
       version: "1.0.0",
       storage: storageStatus,
       webhooks: webhookStatus,
       paymentRails: {
         enabled: orchestratorHealth.enabledRails,
-        btc: orchestratorHealth.rails.btc,
-        xmr: orchestratorHealth.rails.xmr,
-        ln: orchestratorHealth.rails.ln,
+        btc: {
+          ...orchestratorHealth.rails.btc,
+          health: globalHealth.rails.BTC,
+        },
+        xmr: {
+          ...orchestratorHealth.rails.xmr,
+          health: globalHealth.rails.XMR,
+        },
+        ln: {
+          ...orchestratorHealth.rails.ln,
+          health: globalHealth.rails.LN,
+        },
       },
     };
     
-    // Add issues and details if degraded
-    if (!isHealthy) {
+    // Add issues and details if degraded/error
+    if (overallStatus !== "healthy") {
       response.issues = [];
       if (storageStatus === "error") response.issues.push("storage_error");
       if (webhookStatus === "queue_full") {
@@ -634,9 +651,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!orchestratorHealth.ok) {
         response.issues.push("payment_rails_degraded");
       }
+      if (globalHealth.overall === "degraded") {
+        response.issues.push("rail_health_degraded");
+      }
+      if (globalHealth.overall === "error") {
+        response.issues.push("rail_health_error");
+      }
     }
     
-    res.status(isHealthy ? 200 : 503).json(response);
+    res.status(overallStatus === "error" ? 503 : 200).json(response);
   });
 
   // Monitoring metrics endpoint
