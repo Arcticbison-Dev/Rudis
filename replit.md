@@ -77,6 +77,15 @@ Altostratus Payments is a privacy-focused, self-hosted crypto payment invoice sy
 - ✅ **Debug Information**: has_been_seen_on_chain, is_being_polled, time_since_last_check, needs_attention
 - ✅ **Debug Usefulness**: Can answer "Has payment been seen?", "How many confirmations?", "Is worker polling?"
 
+**Security & Privacy for Monitoring/Admin - Step 7 (2025-11-19) - COMPLETE:**
+- ✅ **Access Control**: /health and /metrics safe for public (no sensitive data), /admin/* protected by ADMIN_API_TOKEN
+- ✅ **Token Separation**: 4 separate tokens (ADMIN_API_TOKEN, RAIL_AUTH_TOKEN, ADMIN_SIM_TOKEN, ALT_WEBHOOK_SECRET)
+- ✅ **Data Minimization**: No PII collected or exposed, only operational payment data (addresses/tx_hashes needed for debugging)
+- ✅ **Log Safety**: Automatic sanitization via sanitizeMetadata() (17 sensitive patterns), admin error logs sanitized
+- ✅ **Privacy Helpers**: sanitizeMetadata() redacts privateKey, seed, macaroon, password, apiKey, secret, token, etc.
+- ✅ **Security Posture**: Strong auth, no PII, no secrets in logs, public endpoints safe by design
+- ✅ **Documentation**: Comprehensive STEP7_SECURITY_PRIVACY.md with compliance notes, best practices, incident response
+
 ## System Architecture
 Altostratus Payments uses a React frontend and an Express.js backend, communicating with isolated payment rail services for blockchain interactions.
 
