@@ -51,6 +51,9 @@ const ENABLE_LN = process.env.ENABLE_LN === "true";
 const ENABLE_BTC = process.env.ENABLE_BTC === "true";
 const ENABLE_XMR = process.env.ENABLE_XMR === "true";
 
+// Admin API configuration (Step 5.3: Security for admin endpoints)
+const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || "";
+
 // Simulation configuration  
 const SIMULATION_ENABLED = process.env.SIMULATION_ENABLED === "true";
 const ADMIN_SIM_TOKEN = process.env.ADMIN_SIM_TOKEN || "";
@@ -154,6 +157,30 @@ function authenticateAdmin(req: Request, res: Response, next: NextFunction) {
   const token = authHeader.substring(7);
   
   if (!token || token.length === 0 || token !== ADMIN_SIM_TOKEN) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  next();
+}
+
+// Authenticate admin API operations (Step 5.3: Security for admin endpoints)
+// Uses ADMIN_API_TOKEN for production admin endpoints (viewing invoices, metrics, etc.)
+function authenticateAdminApi(req: Request, res: Response, next: NextFunction) {
+  // Fail fast if ADMIN_API_TOKEN is not configured
+  if (!ADMIN_API_TOKEN || ADMIN_API_TOKEN.length === 0) {
+    console.error("CRITICAL: ADMIN_API_TOKEN not configured for admin API operations");
+    return res.status(500).json({ error: "Server configuration error" });
+  }
+  
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  const token = authHeader.substring(7);
+  
+  if (!token || token.length === 0 || token !== ADMIN_API_TOKEN) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   
@@ -674,6 +701,161 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/metrics", (req, res) => {
     const metrics = monitoring.getMetrics();
     res.json(metrics);
+  });
+
+  // ============================================================================
+  // Admin Endpoints (Step 5: Admin / Ops View - Invoices)
+  // ============================================================================
+  
+  /**
+   * GET /admin/invoices - List all invoices with filtering (Step 5.1: Admin endpoint basics)
+   * 
+   * Protected by ADMIN_API_TOKEN for security (Step 5.3)
+   * 
+   * Query params:
+   * - rail: Filter by rail (btc, xmr, ln)
+   * - status: Filter by status (pending, confirmed, expired, failed)
+   * - created_after: ISO 8601 timestamp
+   * - created_before: ISO 8601 timestamp
+   * - limit: Max results (default: 100, max: 1000)
+   * - offset: Pagination offset (default: 0)
+   * 
+   * Response:
+   * - invoices: Array of invoice objects (Step 5.2: Invoice list view)
+   * - total: Total count matching filters
+   * - limit: Applied limit
+   * - offset: Applied offset
+   */
+  app.get("/admin/invoices", authenticateAdminApi, async (req, res) => {
+    try {
+      // Parse and validate query parameters
+      const rail = req.query.rail as string | undefined;
+      const status = req.query.status as string | undefined;
+      const created_after = req.query.created_after as string | undefined;
+      const created_before = req.query.created_before as string | undefined;
+      const limitParam = req.query.limit as string | undefined;
+      const offsetParam = req.query.offset as string | undefined;
+      
+      // Validate rail param
+      if (rail && !["btc", "xmr", "ln"].includes(rail.toLowerCase())) {
+        return res.status(400).json({
+          error: "invalid_rail",
+          message: "rail must be one of: btc, xmr, ln"
+        });
+      }
+      
+      // Validate status param
+      if (status && !["pending", "confirmed", "expired", "failed", "confirming"].includes(status.toLowerCase())) {
+        return res.status(400).json({
+          error: "invalid_status",
+          message: "status must be one of: pending, confirming, confirmed, expired, failed"
+        });
+      }
+      
+      // Parse pagination params
+      const limit = Math.min(
+        parseInt(limitParam || "100", 10) || 100,
+        1000 // Max 1000 results per page
+      );
+      const offset = parseInt(offsetParam || "0", 10) || 0;
+      
+      // Get all invoices (we'll filter in memory for MVP)
+      // In production, this should use database queries with WHERE clauses
+      let invoices = await storage.listInvoices();
+      
+      // Apply filters
+      if (rail) {
+        const dbCurrency = railToCurrency(rail.toUpperCase() as "BTC" | "XMR" | "LN");
+        invoices = invoices.filter(inv => inv.currency === dbCurrency);
+      }
+      
+      if (status) {
+        invoices = invoices.filter(inv => inv.status.toLowerCase() === status.toLowerCase());
+      }
+      
+      if (created_after) {
+        const afterDate = new Date(created_after);
+        if (isNaN(afterDate.getTime())) {
+          return res.status(400).json({
+            error: "invalid_date",
+            message: "created_after must be a valid ISO 8601 timestamp"
+          });
+        }
+        invoices = invoices.filter(inv => new Date(inv.createdAt) >= afterDate);
+      }
+      
+      if (created_before) {
+        const beforeDate = new Date(created_before);
+        if (isNaN(beforeDate.getTime())) {
+          return res.status(400).json({
+            error: "invalid_date",
+            message: "created_before must be a valid ISO 8601 timestamp"
+          });
+        }
+        invoices = invoices.filter(inv => new Date(inv.createdAt) <= beforeDate);
+      }
+      
+      // Sort by creation date (newest first)
+      invoices.sort((a, b) => 
+        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      );
+      
+      const total = invoices.length;
+      
+      // Apply pagination
+      const paginatedInvoices = invoices.slice(offset, offset + limit);
+      
+      // Format response (Step 5.2: Invoice list view)
+      const formattedInvoices = paginatedInvoices.map(inv => {
+        const rail = currencyToRail(inv.currency);
+        
+        const result: any = {
+          id: inv.id,
+          rail: rail.toLowerCase(),
+          asset: inv.asset,
+          amount_atomic: inv.amount,
+          status: inv.status,
+          created_at: inv.createdAt,
+          updated_at: inv.updatedAt,
+        };
+        
+        // Include address for BTC/XMR
+        if (rail === "BTC" || rail === "XMR") {
+          result.address = inv.paymentAddress;
+        }
+        
+        // Include BOLT11 invoice for Lightning (can be truncated in UI)
+        if (rail === "LN" && inv.bolt11Invoice) {
+          result.invoice_bolt11 = inv.bolt11Invoice;
+        }
+        
+        // Include additional useful fields
+        if (inv.paidAt) {
+          result.paid_at = inv.paidAt;
+        }
+        if (inv.expiresAt) {
+          result.expires_at = inv.expiresAt;
+        }
+        if (inv.amountPaidAtomic) {
+          result.amount_paid_atomic = inv.amountPaidAtomic;
+        }
+        
+        return result;
+      });
+      
+      res.json({
+        invoices: formattedInvoices,
+        total,
+        limit,
+        offset,
+      });
+    } catch (error: any) {
+      console.error("Error fetching admin invoices:", error);
+      res.status(500).json({
+        error: "internal_error",
+        message: "Failed to fetch invoices"
+      });
+    }
   });
 
   // ============================================================================

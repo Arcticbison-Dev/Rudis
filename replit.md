@@ -56,6 +56,16 @@ Altostratus Payments is a privacy-focused, self-hosted crypto payment invoice sy
 - ✅ **State Change Detection**: Only emits alerts on status transitions, not on every poll failure
 - ✅ **Global Alert Helpers**: logConfigError(), logDatabaseError(), logPaymentStuck() for system-wide issues
 
+**Admin / Ops View - Invoices - Step 5 (2025-11-19) - COMPLETE:**
+- ✅ **Admin Endpoint Basics**: GET /admin/invoices with filtering via query params (rail, status, created_after, created_before)
+- ✅ **Invoice List View**: Shows id, rail, asset, amount_atomic, status, created_at, updated_at, address (BTC/XMR), invoice_bolt11 (LN)
+- ✅ **Security**: Admin endpoints protected by ADMIN_API_TOKEN (separate from RAIL_AUTH_TOKEN)
+- ✅ **Authentication Middleware**: authenticateAdminApi() validates Bearer token for all admin endpoints
+- ✅ **Pagination**: Supports limit (max 1000) and offset query params
+- ✅ **Filtering**: By rail (btc/xmr/ln), status (pending/confirmed/expired/failed), date range
+- ✅ **Response Format**: JSON with invoices array, total count, limit, offset
+- ✅ **API Convention**: Uses "ln" in API (lowercase), "Lightning" in database (proper conversion)
+
 ## System Architecture
 Altostratus Payments uses a React frontend and an Express.js backend, communicating with isolated payment rail services for blockchain interactions.
 
