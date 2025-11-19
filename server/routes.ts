@@ -850,7 +850,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         offset,
       });
     } catch (error: any) {
-      console.error("Error fetching admin invoices:", error);
+      // Step 7.3: Log safety - don't log full error object (may contain invoice data)
+      console.error("Error fetching admin invoices:", {
+        message: error.message,
+        code: error.code,
+        name: error.name,
+      });
       res.status(500).json({
         error: "internal_error",
         message: "Failed to fetch invoices"
@@ -979,7 +984,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json(response);
     } catch (error: any) {
-      console.error("Error fetching admin invoice detail:", error);
+      // Step 7.3: Log safety - don't log full error object (may contain invoice data)
+      console.error("Error fetching admin invoice detail:", {
+        message: error.message,
+        code: error.code,
+        name: error.name,
+      });
       res.status(500).json({
         error: "internal_error",
         message: "Failed to fetch invoice detail"
