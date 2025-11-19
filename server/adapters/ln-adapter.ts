@@ -40,37 +40,172 @@ interface LnHealthResponse {
 }
 
 /**
- * Lightning Network Rail Adapter
+ * Lightning Network Configuration
  * 
- * Configuration via environment variables:
- * - LN_SERVICE_URL: URL of rail-ln service (default: http://localhost:5001)
+ * Future Backend Support (reserved env vars):
+ * - LN_BACKEND: Backend type (lnd, cln, lnbits, eclair) - not yet used
+ * - LN_RPC_URL: RPC endpoint for Lightning backend - not yet used
+ * - LN_MACAROON: LND macaroon (hex-encoded) - not yet used
+ * - LN_API_KEY: API key for backends like LNbits - not yet used
+ * - LN_CERT: TLS certificate path for LND - not yet used
+ * 
+ * Current Implementation:
+ * - LN_SERVICE_URL: URL of rail-ln service (microservice architecture)
  * - RAIL_AUTH_TOKEN: Authentication token for rail services
  * - ENABLE_LN: Enable Lightning Network rail (default: false)
+ */
+interface LnConfig {
+  // Future backend configuration (reserved, not yet implemented)
+  backend?: "lnd" | "cln" | "lnbits" | "eclair";
+  rpcUrl?: string;
+  macaroon?: string;
+  apiKey?: string;
+  certPath?: string;
+  
+  // Current microservice architecture
+  serviceUrl: string;
+  authToken: string;
+  serviceConfigured: boolean;
+}
+
+/**
+ * Lightning Network Rail Adapter
  * 
  * Safe-Stubbing:
  * When LN service is not configured or unavailable, adapter returns controlled
  * errors instead of attempting HTTP calls. This allows the system to run without
  * crashing when LN is not yet integrated.
+ * 
+ * Future: Will support direct LND, CLN, LNbits, and Eclair backends.
  */
 export class LnAdapter implements RailAdapter {
   readonly currency = "LN" as const;
-  private readonly serviceUrl: string;
-  private readonly authToken: string;
+  private readonly config: LnConfig;
   private readonly confirmationsRequired = 0; // LN is instant (0-conf)
-  private readonly serviceConfigured: boolean;
 
   constructor() {
-    this.serviceUrl = process.env.LN_SERVICE_URL || "http://localhost:5001";
-    this.authToken = process.env.RAIL_AUTH_TOKEN || "";
-    this.serviceConfigured = !!process.env.LN_SERVICE_URL;
+    // Load and validate configuration
+    this.config = this.loadConfig();
     
-    if (!this.authToken) {
+    // Validate configuration on startup
+    this.validateConfig();
+  }
+  
+  /**
+   * Load Lightning Network configuration from environment
+   */
+  private loadConfig(): LnConfig {
+    return {
+      // Future backend configuration (reserved)
+      backend: (process.env.LN_BACKEND as LnConfig["backend"]) || undefined,
+      rpcUrl: process.env.LN_RPC_URL || undefined,
+      macaroon: process.env.LN_MACAROON || undefined,
+      apiKey: process.env.LN_API_KEY || undefined,
+      certPath: process.env.LN_CERT || undefined,
+      
+      // Current microservice architecture
+      serviceUrl: process.env.LN_SERVICE_URL || "http://localhost:5001",
+      authToken: process.env.RAIL_AUTH_TOKEN || "",
+      serviceConfigured: !!process.env.LN_SERVICE_URL,
+    };
+  }
+  
+  /**
+   * Validate Lightning Network configuration on startup
+   * 
+   * Logs clear errors if LN_BACKEND is set but required vars are missing.
+   * This helps developers catch configuration issues early.
+   */
+  private validateConfig(): void {
+    // Check for future backend configuration (not yet implemented)
+    if (this.config.backend) {
+      console.warn("╔═══════════════════════════════════════════════════════════╗");
+      console.warn("║ ⚠️  LN Backend Configuration Detected (Not Implemented)  ║");
+      console.warn("╠═══════════════════════════════════════════════════════════╣");
+      console.warn(`║ LN_BACKEND=${this.config.backend} is set but not yet supported.     ║`);
+      console.warn("║ The system will use microservice architecture (rail-ln). ║");
+      console.warn("║                                                           ║");
+      console.warn("║ Future backend support planned for:                      ║");
+      console.warn("║ - lnd: Lightning Network Daemon (LND)                    ║");
+      console.warn("║ - cln: Core Lightning (CLN)                              ║");
+      console.warn("║ - lnbits: LNbits wallet                                  ║");
+      console.warn("║ - eclair: ACINQ Eclair                                   ║");
+      console.warn("║                                                           ║");
+      console.warn("║ Required environment variables per backend:              ║");
+      console.warn("║ LND:    LN_RPC_URL, LN_MACAROON, LN_CERT                 ║");
+      console.warn("║ CLN:    LN_RPC_URL                                       ║");
+      console.warn("║ LNbits: LN_RPC_URL, LN_API_KEY                           ║");
+      console.warn("║ Eclair: LN_RPC_URL, LN_API_KEY                           ║");
+      console.warn("╚═══════════════════════════════════════════════════════════╝");
+      
+      // Check if required vars are set (for future use)
+      const missingVars = this.getMissingBackendVars();
+      if (missingVars.length > 0) {
+        console.warn(`⚠️ Missing environment variables for ${this.config.backend}: ${missingVars.join(", ")}`);
+        console.warn("⚠️ These will be required when backend support is implemented.");
+      }
+    }
+    
+    // Current microservice architecture validation
+    if (!this.config.authToken) {
       console.warn("⚠️ LN Adapter: RAIL_AUTH_TOKEN not set - authentication disabled");
     }
     
-    if (!this.serviceConfigured) {
+    if (!this.config.serviceConfigured) {
       console.warn("⚠️ LN Adapter: LN_SERVICE_URL not configured - running in stub mode");
+      console.warn("   Set LN_SERVICE_URL to enable Lightning Network payments");
+    } else {
+      console.log(`✓ LN Adapter: Service configured at ${this.config.serviceUrl}`);
     }
+  }
+  
+  /**
+   * Get missing environment variables for the configured backend
+   * (Reserved for future implementation)
+   */
+  private getMissingBackendVars(): string[] {
+    if (!this.config.backend) return [];
+    
+    const missing: string[] = [];
+    
+    switch (this.config.backend) {
+      case "lnd":
+        if (!this.config.rpcUrl) missing.push("LN_RPC_URL");
+        if (!this.config.macaroon) missing.push("LN_MACAROON");
+        if (!this.config.certPath) missing.push("LN_CERT");
+        break;
+      case "cln":
+        if (!this.config.rpcUrl) missing.push("LN_RPC_URL");
+        break;
+      case "lnbits":
+      case "eclair":
+        if (!this.config.rpcUrl) missing.push("LN_RPC_URL");
+        if (!this.config.apiKey) missing.push("LN_API_KEY");
+        break;
+    }
+    
+    return missing;
+  }
+  
+  /**
+   * Get service URL (current implementation uses microservice)
+   */
+  private get serviceUrl(): string {
+    return this.config.serviceUrl;
+  }
+  
+  /**
+   * Get auth token
+   */
+  private get authToken(): string {
+    return this.config.authToken;
+  }
+  
+  /**
+   * Check if service is configured
+   */
+  private get serviceConfigured(): boolean {
+    return this.config.serviceConfigured;
   }
 
   /**
