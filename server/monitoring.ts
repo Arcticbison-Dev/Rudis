@@ -38,15 +38,22 @@ export type PaymentEvent =
  * Infrastructure events
  */
 export type InfraEvent = 
-  | "poll.started"    // Polling cycle started
-  | "poll.completed"  // Polling cycle completed successfully
+  | "poll.started"        // Polling cycle started
+  | "poll.completed"      // Polling cycle completed successfully
   | "poll.success"
   | "poll.failed"
   | "webhook.queued"
   | "webhook.success"
   | "webhook.failed"
   | "rail.unavailable"
-  | "rail.healthy";
+  | "rail.healthy"
+  | "rail.degraded"       // Rail entered degraded state
+  | "rail.down"           // Rail entered error/down state
+  | "rail.recovered"      // Rail recovered from degraded/error state
+  | "rail.stale"          // Rail has stale polling data
+  | "payment.stuck"       // Payment stuck in pending state
+  | "config.error"        // Configuration error at startup
+  | "database.error";     // Database connectivity error
 
 export type MonitoringEvent = PaymentEvent | InfraEvent;
 
@@ -99,9 +106,52 @@ const ALERT_WEBHOOK_URL = process.env.ALERT_WEBHOOK_URL || "";
 const ALERT_WEBHOOK_ENABLED = ALERT_WEBHOOK_URL.length > 0;
 
 /**
- * Alert conditions to monitor
+ * Alert conditions to monitor (Step 4.1: Alert conditions defined)
  */
 const ALERT_CONDITIONS: AlertCondition[] = [
+  // Per-Rail Alert Conditions
+  
+  // Poll failures: consecutive_poll_failures >= 3 triggers degraded state
+  {
+    id: "rail_degraded",
+    event: "rail.degraded",
+    threshold: 1,
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    severity: "warning",
+    description: "Rail entered degraded state (3+ consecutive poll failures)",
+  },
+  
+  // Rail down: consecutive_poll_failures >= 5 or stale polling
+  {
+    id: "rail_down",
+    event: "rail.down",
+    threshold: 1,
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    severity: "critical",
+    description: "Rail is down (5+ consecutive poll failures or stale polling)",
+  },
+  
+  // Stale polling: now - last_successful_poll_at > 10 minutes
+  {
+    id: "rail_stale_polling",
+    event: "rail.stale",
+    threshold: 1,
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    severity: "warning",
+    description: "Rail has not polled successfully in >10 minutes",
+  },
+  
+  // Stuck pending payments: payment pending for longer than expected
+  {
+    id: "payment_stuck_pending",
+    event: "payment.stuck",
+    threshold: 3,
+    windowMs: 30 * 60 * 1000, // 30 minutes
+    severity: "warning",
+    description: "3+ payments stuck in pending state while others are confirming",
+  },
+  
+  // Payment lifecycle alerts
   {
     id: "payment_failures",
     event: "payment.failed",
@@ -383,20 +433,33 @@ function checkAlertConditions(event: MonitoringEvent, rail?: Rail): void {
 
 /**
  * Fire an alert via configured channels
+ * (Step 4.2: Alert emission mechanism)
+ * 
+ * Emits alerts to:
+ * - Console (always with level="alert")
+ * - Webhook (if ALERT_WEBHOOK_URL configured)
+ * 
+ * Alert payload includes:
+ * - rail
+ * - event (rail.degraded, rail.down, etc.)
+ * - reason
+ * - Relevant counters/timestamps
  */
 async function fireAlert(alert: Alert): Promise<void> {
-  // Log to console (always)
+  // Log to console with level="alert" (Step 4.2)
   console.error(JSON.stringify({
+    ts: alert.timestamp,
+    level: "alert",
+    event: alert.condition.event,
     alert: true,
     severity: alert.condition.severity,
     id: alert.condition.id,
     description: alert.condition.description,
     rail: alert.rail,
     count: alert.count,
-    timestamp: alert.timestamp,
   }));
 
-  // Send webhook if configured
+  // Send webhook if configured (Step 4.2: Optional external notifier)
   if (ALERT_WEBHOOK_ENABLED) {
     try {
       await axios.post(
@@ -404,6 +467,7 @@ async function fireAlert(alert: Alert): Promise<void> {
         {
           severity: alert.condition.severity,
           alert_id: alert.condition.id,
+          event: alert.condition.event,
           description: alert.condition.description,
           rail: alert.rail,
           event_count: alert.count,
@@ -516,41 +580,99 @@ function getRailHealthState(rail: Rail): RailHealthState {
 
 /**
  * Update health status based on current state
+ * (Step 4.2: Alert emission mechanism with state change detection)
  * 
  * Rules:
  * - ok: No consecutive failures, recent successful polls
  * - degraded: Some failures but below alert threshold
  * - error: Failures exceed threshold or no polls for extended period
+ * 
+ * Emits alert events when state changes:
+ * - rail.degraded: When entering degraded state
+ * - rail.down: When entering error state
+ * - rail.stale: When polling data is stale
+ * - rail.recovered: When recovering from degraded/error state
  */
 function updateRailHealthStatus(rail: Rail): void {
   const state = getRailHealthState(rail);
   const now = Date.now();
+  const previousStatus = state.status;
   
-  // Configuration
+  // Configuration (Step 4.1: Alert conditions)
   const MAX_TIME_SINCE_POLL = 10 * 60 * 1000; // 10 minutes
   const DEGRADED_THRESHOLD = 3; // Consecutive failures
   const ERROR_THRESHOLD = 5; // Consecutive failures
   
-  // Check if we haven't polled in a long time
+  // Check if we haven't polled in a long time (stale polling)
   const timeSinceLastPoll = state.lastSuccessfulPollAt 
     ? now - state.lastSuccessfulPollAt 
     : Infinity;
   
-  if (timeSinceLastPoll > MAX_TIME_SINCE_POLL && state.lastSuccessfulPollAt !== null) {
-    state.status = "error";
-    return;
-  }
+  let newStatus: HealthStatus = "ok";
+  let stalePolling = false;
   
-  // Check consecutive failures
-  if (state.consecutivePollFailures >= ERROR_THRESHOLD) {
-    state.status = "error";
+  if (timeSinceLastPoll > MAX_TIME_SINCE_POLL && state.lastSuccessfulPollAt !== null) {
+    newStatus = "error";
+    stalePolling = true;
+    
+    // Emit stale polling alert
+    logEvent("rail.stale", rail, {
+      timeSinceLastPollMs: timeSinceLastPoll,
+      lastSuccessfulPollAt: new Date(state.lastSuccessfulPollAt).toISOString(),
+    }, "alert");
+  } else if (state.consecutivePollFailures >= ERROR_THRESHOLD) {
+    // Check consecutive failures
+    newStatus = "error";
   } else if (state.consecutivePollFailures >= DEGRADED_THRESHOLD) {
-    state.status = "degraded";
+    newStatus = "degraded";
   } else if (state.consecutivePollFailures === 0) {
-    state.status = "ok";
+    newStatus = "ok";
   } else {
     // 1-2 failures: still ok but being monitored
-    state.status = "ok";
+    newStatus = "ok";
+  }
+  
+  // Update status
+  state.status = newStatus;
+  
+  // Emit alert events on state changes (Step 4.2: Alert emission)
+  if (previousStatus !== newStatus) {
+    if (newStatus === "degraded" && previousStatus === "ok") {
+      // Rail just entered degraded state
+      logEvent("rail.degraded", rail, {
+        consecutivePollFailures: state.consecutivePollFailures,
+        lastPollErrorAt: state.lastPollErrorAt 
+          ? new Date(state.lastPollErrorAt).toISOString() 
+          : null,
+        reason: `${state.consecutivePollFailures} consecutive poll failures`,
+      }, "alert");
+    } else if (newStatus === "error" && (previousStatus === "ok" || previousStatus === "degraded")) {
+      // Rail just went down
+      logEvent("rail.down", rail, {
+        consecutivePollFailures: state.consecutivePollFailures,
+        lastPollErrorAt: state.lastPollErrorAt 
+          ? new Date(state.lastPollErrorAt).toISOString() 
+          : null,
+        stalePolling,
+        reason: stalePolling 
+          ? `No successful polls for ${Math.round(timeSinceLastPoll / 60000)} minutes`
+          : `${state.consecutivePollFailures} consecutive poll failures`,
+      }, "alert");
+    } else if (newStatus === "ok" && (previousStatus === "degraded" || previousStatus === "error")) {
+      // Rail recovered! (Step 4.3: Recovery event)
+      logEvent("rail.recovered", rail, {
+        previousStatus,
+        recoveryTimestamp: new Date(now).toISOString(),
+        downtimeDurationMs: state.lastPollErrorAt ? now - state.lastPollErrorAt : null,
+      }, "alert");
+    } else if (newStatus === "degraded" && previousStatus === "error") {
+      // Partial recovery: error → degraded
+      logEvent("rail.degraded", rail, {
+        consecutivePollFailures: state.consecutivePollFailures,
+        previousStatus: "error",
+        reason: "Partial recovery from error state",
+      }, "info");
+    }
   }
 }
 
@@ -898,4 +1020,72 @@ export function logRailHealth(rail: Rail, healthy: boolean, error?: string): voi
     error ? { error } : undefined,
     healthy ? "info" : "error"
   );
+}
+
+// ============================================================================
+// Global Alerts (Step 4.1: Global alert conditions)
+// ============================================================================
+
+/**
+ * Log startup configuration error
+ * (Step 4.1: Global alert - missing env vars for enabled rail)
+ * 
+ * @param rail - Payment rail with config error
+ * @param missingEnvVars - Array of missing environment variables
+ * @param details - Additional error details
+ */
+export function logConfigError(
+  rail: Rail,
+  missingEnvVars: string[],
+  details?: string
+): void {
+  logEvent("config.error", rail, {
+    missingEnvVars,
+    details,
+    reason: `Missing required environment variables: ${missingEnvVars.join(", ")}`,
+  }, "alert");
+}
+
+/**
+ * Log database connectivity error
+ * (Step 4.1: Global alert - database issues detected at bootstrap)
+ * 
+ * @param operation - Database operation that failed (e.g., "bootstrap", "query")
+ * @param error - Error message
+ * @param willRetry - Whether the operation will be retried
+ */
+export function logDatabaseError(
+  operation: string,
+  error: string,
+  willRetry: boolean = false
+): void {
+  logEvent("database.error", undefined, {
+    operation,
+    error,
+    willRetry,
+  }, "alert");
+}
+
+/**
+ * Log stuck pending payment alert
+ * (Step 4.1: Per-rail alert - payment stuck in pending state)
+ * 
+ * @param rail - Payment rail
+ * @param invoiceId - Invoice ID
+ * @param pendingDurationMs - How long payment has been pending (ms)
+ * @param otherPaymentsConfirming - Whether other payments are confirming
+ */
+export function logPaymentStuck(
+  rail: Rail,
+  invoiceId: string,
+  pendingDurationMs: number,
+  otherPaymentsConfirming: boolean
+): void {
+  logEvent("payment.stuck", rail, {
+    invoiceId,
+    pendingDurationMs,
+    pendingDurationMinutes: Math.round(pendingDurationMs / 60000),
+    otherPaymentsConfirming,
+    reason: `Payment stuck in pending state for ${Math.round(pendingDurationMs / 60000)} minutes`,
+  }, "alert");
 }

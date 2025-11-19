@@ -46,6 +46,16 @@ Altostratus Payments is a privacy-focused, self-hosted crypto payment invoice sy
 - ✅ **HTTP Status Codes**: 200 for ok/degraded, 503 for error state
 - ✅ **Rail States**: Handles disabled, not_implemented, ok, degraded, error statuses
 
+**Multi-Rail Monitoring System - Step 4 (2025-11-19) - COMPLETE:**
+- ✅ **Alert Conditions**: Per-rail (poll failures ≥3, rail down ≥5, stale polling >10min, stuck payments) + Global (config errors, database errors)
+- ✅ **Alert Emission**: Single centralized location (updateRailHealthStatus) emits rail.degraded, rail.down, rail.recovered events with level="alert"
+- ✅ **Alert Payload**: Includes rail, event, reason, counters (consecutivePollFailures), timestamps (lastPollErrorAt, lastSuccessfulPollAt)
+- ✅ **Webhook Notifier**: Optional external webhook (ALERT_WEBHOOK_URL) for integration with monitoring services
+- ✅ **De-duplication**: 15-minute cooldown per alert+rail combination prevents spam
+- ✅ **Recovery Tracking**: Automatic rail.recovered events when transitioning from degraded/error → ok
+- ✅ **State Change Detection**: Only emits alerts on status transitions, not on every poll failure
+- ✅ **Global Alert Helpers**: logConfigError(), logDatabaseError(), logPaymentStuck() for system-wide issues
+
 ## System Architecture
 Altostratus Payments uses a React frontend and an Express.js backend, communicating with isolated payment rail services for blockchain interactions.
 
