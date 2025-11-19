@@ -211,16 +211,22 @@ interface PaymentApiResponse {
   created_at: string;
   updated_at: string;
   expires_at?: string;
+  /** BOLT11 invoice (Lightning only) */
+  invoice_bolt11?: string;
 }
 
 /**
  * Transform CanonicalPayment to simpler API format
+ * 
+ * Note: For Lightning payments, includes invoice_bolt11 from database.
+ * This is async because it may need to fetch from storage.
  */
-function canonicalToApiResponse(payment: CanonicalPayment): PaymentApiResponse {
+async function canonicalToApiResponse(payment: CanonicalPayment): Promise<PaymentApiResponse> {
   // Determine asset from rail
   const asset = payment.currency === "LN" ? "BTC" : payment.currency;
   
-  return {
+  // Base response
+  const response: PaymentApiResponse = {
     id: payment.invoiceId,
     rail: payment.currency,
     asset,
@@ -234,6 +240,16 @@ function canonicalToApiResponse(payment: CanonicalPayment): PaymentApiResponse {
     updated_at: payment.updatedAt,
     ...(payment.expiresAt && { expires_at: payment.expiresAt }),
   };
+  
+  // For Lightning payments, include BOLT11 invoice from database
+  if (payment.currency === "LN") {
+    const invoice = await storage.getInvoice(payment.invoiceId);
+    if (invoice?.bolt11Invoice) {
+      response.invoice_bolt11 = invoice.bolt11Invoice;
+    }
+  }
+  
+  return response;
 }
 
 // Queue a webhook for delivery (creates pending webhook log)
@@ -684,11 +700,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         ...(payment.expiresAt && { expiresAt: new Date(payment.expiresAt) }),
       });
       
+      // Update invoice with BOLT11 for Lightning payments
+      if (rail === "LN" && payment.paymentAddress) {
+        await storage.updateInvoice(invoice.id, {
+          bolt11Invoice: payment.paymentAddress,
+        });
+      }
+      
       // Update payment with final invoice ID for response
       payment.invoiceId = invoice.id;
       
       // Transform to API response format
-      const apiResponse = canonicalToApiResponse(payment);
+      const apiResponse = await canonicalToApiResponse(payment);
       
       // Note: monitoring.logPaymentCreated() already called by orchestrator
       // This is additional structured logging for the HTTP layer
@@ -716,11 +739,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      // Handle orchestrator errors
-      if (error.message?.includes("not enabled") || error.message?.includes("not supported")) {
+      // Handle RailUnavailableError (e.g., LN not configured)
+      if (error.code === "RAIL_UNAVAILABLE") {
+        // Extract specific error reason (e.g., "ln_not_implemented")
+        const errorCode = error.details?.reason || "rail_unavailable";
+        const rail = error.details?.currency || req.body?.rail;
+        
+        return res.status(503).json({ 
+          error: errorCode,
+          rail: rail?.toLowerCase(),
+          message: error.message
+        });
+      }
+      
+      // Handle unsupported currency
+      if (error.code === "UNSUPPORTED_CURRENCY") {
         return res.status(400).json({ 
-          error: "rail_unavailable",
-          message: error.message 
+          error: "unsupported_currency",
+          rail: error.details?.currency?.toLowerCase(),
+          message: error.message
         });
       }
       
@@ -758,12 +795,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Get payment status via orchestrator
       const payment = await orchestrator.getPaymentStatus(
-        invoice.currency as "BTC" | "XMR" | "LN",
+        currencyToRail(invoice.currency),
         paymentId
       );
       
       // Transform to API response format
-      const apiResponse = canonicalToApiResponse(payment);
+      const apiResponse = await canonicalToApiResponse(payment);
       
       res.json(apiResponse);
       
