@@ -17,6 +17,11 @@ import axios from "axios";
 export type Rail = "BTC" | "XMR" | "LN";
 
 /**
+ * Log severity levels
+ */
+export type LogLevel = "info" | "warn" | "error" | "alert";
+
+/**
  * Payment lifecycle events
  */
 export type PaymentEvent = 
@@ -26,12 +31,15 @@ export type PaymentEvent =
   | "payment.confirming"
   | "payment.confirmed"
   | "payment.expired"
+  | "payment.failed"  // Payment failed during processing (validation, internal error)
   | "payment.error";
 
 /**
  * Infrastructure events
  */
 export type InfraEvent = 
+  | "poll.started"    // Polling cycle started
+  | "poll.completed"  // Polling cycle completed successfully
   | "poll.success"
   | "poll.failed"
   | "webhook.queued"
@@ -94,6 +102,14 @@ const ALERT_WEBHOOK_ENABLED = ALERT_WEBHOOK_URL.length > 0;
  * Alert conditions to monitor
  */
 const ALERT_CONDITIONS: AlertCondition[] = [
+  {
+    id: "payment_failures",
+    event: "payment.failed",
+    threshold: 3,
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    severity: "critical",
+    description: "3+ payment failures in 5 minutes (validation or internal errors)",
+  },
   {
     id: "payment_error_spike",
     event: "payment.error",
@@ -159,16 +175,104 @@ const ALERT_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes between same alert
 // ============================================================================
 
 /**
+ * Sensitive keys that should NEVER be logged
+ * 
+ * This includes:
+ * - Private keys, seeds, mnemonics
+ * - RPC passwords and auth tokens
+ * - Full authentication tokens (only prefix allowed)
+ * - API keys and secrets
+ */
+const SENSITIVE_KEYS = [
+  "privateKey",
+  "private_key",
+  "seed",
+  "mnemonic",
+  "password",
+  "rpcPassword",
+  "rpc_password",
+  "authToken",
+  "auth_token",
+  "token",
+  "apiKey",
+  "api_key",
+  "secret",
+  "macaroon",
+  "cert",
+  "certificate",
+];
+
+/**
+ * Sanitize metadata to remove sensitive values
+ * 
+ * @param metadata - Raw metadata object
+ * @returns Sanitized metadata safe for logging
+ */
+function sanitizeMetadata(metadata: Record<string, any>): Record<string, any> {
+  const sanitized: Record<string, any> = {};
+
+  for (const [key, value] of Object.entries(metadata)) {
+    const lowerKey = key.toLowerCase();
+
+    // Check if key is sensitive
+    const isSensitive = SENSITIVE_KEYS.some(sensitiveKey => 
+      lowerKey.includes(sensitiveKey.toLowerCase())
+    );
+
+    if (isSensitive) {
+      // For auth tokens, log only first 8 chars as prefix
+      if (typeof value === "string" && (lowerKey.includes("token") || lowerKey.includes("auth"))) {
+        sanitized[key] = `${value.substring(0, 8)}...`;
+      } else {
+        sanitized[key] = "[REDACTED]";
+      }
+    } else {
+      sanitized[key] = value;
+    }
+  }
+
+  return sanitized;
+}
+
+/**
+ * Determine log level based on event type
+ * 
+ * More specific patterns must be checked first
+ */
+function getEventLogLevel(event: MonitoringEvent): LogLevel {
+  // Check specific events first (before generic patterns)
+  if (event === "payment.create_failed") {
+    return "warn";
+  }
+  if (event === "payment.expired") {
+    return "warn";
+  }
+  
+  // Check generic error patterns
+  if (event.startsWith("payment.error") || event === "payment.failed") {
+    return "error";
+  }
+  if (event.includes("failed") || event === "rail.unavailable") {
+    return "error";
+  }
+  
+  // Default to info
+  return "info";
+}
+
+/**
  * Log a payment or infrastructure event
  * 
  * @param event - Event type
  * @param rail - Payment rail (optional for cross-rail events)
  * @param metadata - Additional context
+ * @param level - Optional explicit log level (auto-detected if not provided)
  */
 export function logEvent(
   event: MonitoringEvent,
   rail?: Rail,
-  metadata?: Record<string, any>
+  metadata?: Record<string, any>,
+  level?: LogLevel
 ): void {
   const timestamp = Date.now();
   
@@ -185,9 +289,13 @@ export function logEvent(
     eventBuffer.splice(0, eventBuffer.length - MAX_BUFFER_SIZE);
   }
 
+  // Determine log level
+  const logLevel = level || getEventLogLevel(event);
+
   // Structured logging
   const logEntry: Record<string, any> = {
     ts: new Date(timestamp).toISOString(),
+    level: logLevel,
     event,
   };
 
@@ -196,15 +304,19 @@ export function logEvent(
   }
 
   if (metadata) {
-    // Merge metadata but avoid logging sensitive data
-    Object.entries(metadata).forEach(([key, value]) => {
-      if (!["address", "txid", "signature"].includes(key)) {
-        logEntry[key] = value;
-      }
-    });
+    // Sanitize and merge metadata
+    const sanitized = sanitizeMetadata(metadata);
+    Object.assign(logEntry, sanitized);
   }
 
-  console.log(JSON.stringify(logEntry));
+  // Log to appropriate stream based on level
+  if (logLevel === "error" || logLevel === "alert") {
+    console.error(JSON.stringify(logEntry));
+  } else if (logLevel === "warn") {
+    console.warn(JSON.stringify(logEntry));
+  } else {
+    console.log(JSON.stringify(logEntry));
+  }
 
   // Check if this event triggers any alerts
   checkAlertConditions(event, rail);
@@ -430,16 +542,126 @@ export function logPaymentStatus(
 
 /**
  * Log payment error
+ * 
+ * Use this for errors that occur during payment processing but don't
+ * necessarily mean the payment failed permanently.
+ * 
+ * @param rail - Payment rail
+ * @param invoiceId - Invoice ID
+ * @param error - Error message
+ * @param errorStack - Optional error stack trace (will be sanitized)
  */
-export function logPaymentError(rail: Rail, invoiceId: string, error: string): void {
-  logEvent("payment.error", rail, { invoiceId, error });
+export function logPaymentError(
+  rail: Rail,
+  invoiceId: string,
+  error: string,
+  errorStack?: string
+): void {
+  const metadata: Record<string, any> = { invoiceId, error };
+  
+  if (errorStack) {
+    // Sanitize stack trace: remove file paths that might contain sensitive info
+    metadata.stack = errorStack
+      .split("\n")
+      .slice(0, 5) // Limit to first 5 lines
+      .map(line => line.trim())
+      .join(" | ");
+  }
+  
+  logEvent("payment.error", rail, metadata, "error");
 }
 
 /**
- * Log poll result
+ * Log payment failure
+ * 
+ * Use this when a payment permanently fails (e.g., validation error, internal error).
+ * This is different from payment.error which may be transient.
+ * 
+ * @param rail - Payment rail
+ * @param invoiceId - Invoice ID
+ * @param reason - Failure reason
+ * @param details - Optional additional details
+ */
+export function logPaymentFailed(
+  rail: Rail,
+  invoiceId: string,
+  reason: string,
+  details?: string
+): void {
+  const metadata: Record<string, any> = { invoiceId, reason };
+  if (details) metadata.details = details;
+  
+  logEvent("payment.failed", rail, metadata, "error");
+}
+
+/**
+ * Log polling cycle started
+ * 
+ * @param rail - Payment rail
+ * @param paymentCount - Number of payments being polled (optional)
+ */
+export function logPollStarted(rail: Rail, paymentCount?: number): void {
+  const metadata = paymentCount !== undefined ? { paymentCount } : undefined;
+  logEvent("poll.started", rail, metadata, "info");
+}
+
+/**
+ * Log polling cycle completed
+ * 
+ * @param rail - Payment rail
+ * @param duration - Duration in milliseconds (optional)
+ * @param updatedCount - Number of payments updated (optional)
+ */
+export function logPollCompleted(
+  rail: Rail,
+  duration?: number,
+  updatedCount?: number
+): void {
+  const metadata: Record<string, any> = {};
+  if (duration !== undefined) metadata.durationMs = duration;
+  if (updatedCount !== undefined) metadata.updatedCount = updatedCount;
+  
+  logEvent("poll.completed", rail, Object.keys(metadata).length > 0 ? metadata : undefined, "info");
+}
+
+/**
+ * Log poll result (legacy - prefer logPollCompleted/logPollFailed)
+ * 
+ * @deprecated Use logPollCompleted() and logPollFailed() instead
  */
 export function logPollResult(rail: Rail, success: boolean, error?: string): void {
-  logEvent(success ? "poll.success" : "poll.failed", rail, error ? { error } : undefined);
+  if (success) {
+    logPollCompleted(rail);
+  } else {
+    logPollFailed(rail, error);
+  }
+}
+
+/**
+ * Log poll failure
+ * 
+ * Use this when a polling cycle fails due to RPC errors, network issues, etc.
+ * This should NOT be used for individual payment errors.
+ * 
+ * @param rail - Payment rail
+ * @param error - Error message
+ * @param errorStack - Optional error stack trace (will be sanitized)
+ */
+export function logPollFailed(rail: Rail, error?: string, errorStack?: string): void {
+  const metadata: Record<string, any> = {};
+  
+  if (error) metadata.error = error;
+  
+  if (errorStack) {
+    // Sanitize stack trace
+    metadata.stack = errorStack
+      .split("\n")
+      .slice(0, 5)
+      .map(line => line.trim())
+      .join(" | ");
+  }
+  
+  logEvent("poll.failed", rail, Object.keys(metadata).length > 0 ? metadata : undefined, "error");
 }
 
 /**
@@ -449,7 +671,8 @@ export function logWebhookResult(invoiceId: string, success: boolean, statusCode
   logEvent(
     success ? "webhook.success" : "webhook.failed",
     undefined,
-    { invoiceId, statusCode }
+    { invoiceId, statusCode },
+    success ? "info" : "error"
   );
 }
 
@@ -460,6 +683,7 @@ export function logRailHealth(rail: Rail, healthy: boolean, error?: string): voi
   logEvent(
     healthy ? "rail.healthy" : "rail.unavailable",
     rail,
-    error ? { error } : undefined
+    error ? { error } : undefined,
+    healthy ? "info" : "error"
   );
 }

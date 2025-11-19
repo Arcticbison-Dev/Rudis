@@ -21,6 +21,14 @@ Altostratus Payments is a privacy-focused, self-hosted crypto payment invoice sy
 - ✅ **Task 4**: Configuration surface for future LN backends (LND, CLN, LNbits, Eclair)
 - ✅ **Task 5**: Logging & monitoring hooks - Structured events with rail='ln', payment.create_failed event
 
+**Multi-Rail Monitoring System - Step 1 (2025-11-19) - COMPLETE:**
+- ✅ **Enhanced Structured Logging**: Added log levels (info, warn, error, alert) with auto-detection
+- ✅ **Payment Lifecycle Events**: All events tracked (created, pending, confirmed, expired, failed, error)
+- ✅ **Infrastructure Events**: poll.started, poll.completed, poll.failed, webhook events, rail health
+- ✅ **Sensitive Data Protection**: Comprehensive filtering (17 patterns) - no keys, seeds, passwords, tokens
+- ✅ **Error Logging**: Stack trace sanitization, deduplication, alert cooldowns
+- ✅ **Alert Conditions**: 5 configured alerts for payment failures, errors, polls, webhooks, rail health
+
 ## System Architecture
 Altostratus Payments uses a React frontend and an Express.js backend, communicating with isolated payment rail services for blockchain interactions.
 
