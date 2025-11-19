@@ -17,6 +17,7 @@ import {
   RailUnavailableError,
   PaymentNotFoundError,
 } from "../../shared/payment-orchestrator";
+import { storage } from "../storage";
 
 /**
  * LN rail service response types (rail-specific)
@@ -44,26 +45,51 @@ interface LnHealthResponse {
  * Configuration via environment variables:
  * - LN_SERVICE_URL: URL of rail-ln service (default: http://localhost:5001)
  * - RAIL_AUTH_TOKEN: Authentication token for rail services
+ * - ENABLE_LN: Enable Lightning Network rail (default: false)
+ * 
+ * Safe-Stubbing:
+ * When LN service is not configured or unavailable, adapter returns controlled
+ * errors instead of attempting HTTP calls. This allows the system to run without
+ * crashing when LN is not yet integrated.
  */
 export class LnAdapter implements RailAdapter {
   readonly currency = "LN" as const;
   private readonly serviceUrl: string;
   private readonly authToken: string;
   private readonly confirmationsRequired = 0; // LN is instant (0-conf)
+  private readonly serviceConfigured: boolean;
 
   constructor() {
     this.serviceUrl = process.env.LN_SERVICE_URL || "http://localhost:5001";
     this.authToken = process.env.RAIL_AUTH_TOKEN || "";
+    this.serviceConfigured = !!process.env.LN_SERVICE_URL;
     
     if (!this.authToken) {
       console.warn("⚠️ LN Adapter: RAIL_AUTH_TOKEN not set - authentication disabled");
+    }
+    
+    if (!this.serviceConfigured) {
+      console.warn("⚠️ LN Adapter: LN_SERVICE_URL not configured - running in stub mode");
     }
   }
 
   /**
    * Create a Lightning invoice
+   * 
+   * Safe-stubbed: Returns controlled error when LN service not configured.
+   * This prevents crashes while LN integration is in progress.
    */
   async createPayment(request: CreatePaymentRequest): Promise<CreatePaymentResponse> {
+    // Safe-stub: Return controlled error if service not configured
+    if (!this.serviceConfigured) {
+      throw new RailUnavailableError("LN", {
+        operation: "createPayment",
+        reason: "ln_not_implemented",
+        details: "Lightning Network service (LN_SERVICE_URL) is not configured. Set LN_SERVICE_URL to enable LN payments.",
+        invoiceId: request.invoiceId,
+      });
+    }
+
     try {
       const response = await axios.post<LnCreateResponse>(
         `${this.serviceUrl}/create`,
@@ -97,8 +123,16 @@ export class LnAdapter implements RailAdapter {
 
   /**
    * Get payment status from LN rail
+   * 
+   * Safe-stubbed: Reads from database only when LN service not configured.
+   * This allows status checks without requiring live service connection.
    */
   async getPaymentStatus(invoiceId: string): Promise<RailPaymentStatus> {
+    // Safe-stub: Read from database only if service not configured
+    if (!this.serviceConfigured) {
+      return this.getPaymentStatusFromDb(invoiceId);
+    }
+
     try {
       const response = await axios.get<LnStatusResponse>(
         `${this.serviceUrl}/status/${invoiceId}`,
@@ -150,9 +184,69 @@ export class LnAdapter implements RailAdapter {
   }
 
   /**
+   * Get payment status from database only (safe-stub fallback)
+   * 
+   * Used when LN service is not configured. Reads invoice and transaction
+   * data from database to provide status without external calls.
+   */
+  private async getPaymentStatusFromDb(invoiceId: string): Promise<RailPaymentStatus> {
+    const invoice = await storage.getInvoice(invoiceId);
+    
+    if (!invoice) {
+      throw new PaymentNotFoundError(invoiceId);
+    }
+
+    // Only process Lightning invoices
+    if (invoice.currency !== "Lightning") {
+      throw new PaymentNotFoundError(invoiceId);
+    }
+
+    const txs = await storage.getPaymentTransactionsByInvoice(invoiceId);
+
+    // Map invoice status to rail status
+    let status: RailPaymentStatus["status"];
+    if (invoice.status === "expired") {
+      status = "expired";
+    } else if (invoice.status === "confirmed") {
+      status = "confirmed";
+    } else {
+      status = "pending";
+    }
+
+    // Build transaction list from database
+    const transactions: BlockchainTransaction[] = txs.map((tx) => ({
+      txidHash: tx.transactionId, // Already hashed in DB
+      amountAtomic: invoice.amountPaidAtomic || "0",
+      confirmations: parseInt(tx.confirmations, 10),
+      blockHeight: tx.blockHeight ? parseInt(tx.blockHeight, 10) : undefined,
+      detectedAt: tx.confirmedAt.toISOString(),
+    }));
+
+    return {
+      status,
+      confirmations: 0, // LN is always 0-conf
+      amountReceived: invoice.amountPaidAtomic || "0",
+      transactions,
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
    * Check LN rail health
+   * 
+   * Safe-stubbed: Returns service unavailable when not configured.
    */
   async healthCheck(): Promise<RailHealth> {
+    // Safe-stub: Return unavailable if service not configured
+    if (!this.serviceConfigured) {
+      return {
+        ok: false,
+        rail: "LN",
+        error: "LN service not configured (LN_SERVICE_URL not set)",
+        backendStatus: "not_configured",
+      };
+    }
+
     try {
       const response = await axios.get<LnHealthResponse>(
         `${this.serviceUrl}/health`,
