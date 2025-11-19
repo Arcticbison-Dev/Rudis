@@ -57,6 +57,7 @@ export type WebhookLog = typeof webhookLogs.$inferSelect;
 export const paymentTransactions = pgTable("payment_transactions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   invoiceId: varchar("invoice_id").notNull(),
+  rail: varchar("rail", { length: 10 }),
   transactionId: text("transaction_id").notNull(),
   confirmations: varchar("confirmations", { length: 10 }).notNull(),
   blockHeight: varchar("block_height", { length: 20 }),

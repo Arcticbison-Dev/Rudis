@@ -946,6 +946,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.createPaymentTransaction({
         invoiceId,
+        rail: "ln",
         transactionId,
         confirmations,
       });
@@ -1010,6 +1011,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.createPaymentTransaction({
         invoiceId,
+        rail: "btc",
         transactionId,
         confirmations,
         blockHeight,
@@ -1076,6 +1078,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.createPaymentTransaction({
         invoiceId,
+        rail: "xmr",
         transactionId,
         confirmations,
         blockHeight,
@@ -1157,8 +1160,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Store payment transaction details
+      // Note: Simulation endpoint - rail inferred from invoice currency
+      const rail = invoice.currency === "Lightning" ? "ln" : invoice.currency === "BTC" ? "btc" : "xmr";
       await storage.createPaymentTransaction({
         invoiceId,
+        rail,
         transactionId,
         confirmations,
         blockHeight,

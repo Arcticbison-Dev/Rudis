@@ -35,6 +35,7 @@ export interface IStorage {
   // Payment transaction operations
   createPaymentTransaction(tx: {
     invoiceId: string;
+    rail?: string;
     transactionId: string;
     confirmations: number;
     blockHeight?: number;
@@ -142,6 +143,7 @@ export class MemStorage implements IStorage {
       updatedAt: now,
       paidAt: null,
       expiresAt: insertInvoice.expiresAt ? new Date(insertInvoice.expiresAt) : null,
+      amountPaidAtomic: null,
       railType: (insertInvoice as any).railType || null,
       bolt11Invoice: (insertInvoice as any).bolt11Invoice || null,
       derivedAddress: (insertInvoice as any).derivedAddress || null,
@@ -199,6 +201,7 @@ export class MemStorage implements IStorage {
 
   async createPaymentTransaction(tx: {
     invoiceId: string;
+    rail?: string;
     transactionId: string;
     confirmations: number;
     blockHeight?: number;
@@ -207,6 +210,7 @@ export class MemStorage implements IStorage {
     const transaction: PaymentTransaction = {
       id,
       invoiceId: tx.invoiceId,
+      rail: tx.rail || null,
       transactionId: tx.transactionId,
       confirmations: tx.confirmations.toString(),
       blockHeight: tx.blockHeight?.toString() || null,
@@ -538,6 +542,7 @@ export class DatabaseStorage implements IStorage {
 
   async createPaymentTransaction(tx: {
     invoiceId: string;
+    rail?: string;
     transactionId: string;
     confirmations: number;
     blockHeight?: number;
@@ -546,6 +551,7 @@ export class DatabaseStorage implements IStorage {
       .insert(paymentTransactions)
       .values({
         invoiceId: tx.invoiceId,
+        rail: tx.rail || null,
         transactionId: tx.transactionId,
         confirmations: tx.confirmations.toString(),
         blockHeight: tx.blockHeight?.toString() || null,
