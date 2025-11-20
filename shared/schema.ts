@@ -37,6 +37,9 @@ export const insertInvoiceSchema = createInsertSchema(invoices).omit({
   currency: z.enum(["BTC", "Lightning", "XMR"]),
   asset: z.enum(["BTC", "XMR"]),
   description: z.string().min(1, "Description is required"),
+  // Lightning Network fields (optional)
+  lnPaymentHash: z.string().optional(),
+  lnCheckingId: z.string().optional(),
 });
 
 export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;

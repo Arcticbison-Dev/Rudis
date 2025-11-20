@@ -179,6 +179,18 @@ export class LnAdapter implements RailAdapter {
       configErrors.push(`LN_MAX_AMOUNT_SATS (${maxAmountSats}) must be >= LN_MIN_AMOUNT_SATS (${minAmountSats})`);
     }
     
+    // Validate webhook secret strength (if webhooks enabled)
+    // SECURITY: Weak secrets are vulnerable to brute force attacks
+    if (enabled && webhookUrl && webhookSecret) {
+      const MIN_SECRET_LENGTH = 32;
+      if (webhookSecret.length < MIN_SECRET_LENGTH) {
+        configErrors.push(
+          `LNBITS_WEBHOOK_SECRET must be >= ${MIN_SECRET_LENGTH} characters (got ${webhookSecret.length}). ` +
+          `Generate with: openssl rand -hex 32`
+        );
+      }
+    }
+    
     const isConfigured = enabled && lnbitsApiUrl !== null && lnbitsWalletKey !== null && configErrors.length === 0;
     
     return {
@@ -361,7 +373,15 @@ export class LnAdapter implements RailAdapter {
       });
 
       const memo = request.metadata?.description as string | undefined || `Invoice ${request.invoiceId}`;
-      const webhookUrl = this.config.webhookUrl || undefined;
+      
+      // Construct webhook URL with secret token in path (if configured)
+      // Pattern: https://my-app.com/rails/ln/webhook/:token
+      // This is more secure than query params (which are logged everywhere)
+      let webhookUrl: string | undefined = undefined;
+      if (this.config.webhookUrl && this.config.webhookSecret) {
+        // Append secret token to base webhook URL
+        webhookUrl = `${this.config.webhookUrl}/${this.config.webhookSecret}`;
+      }
 
       const lnbitsInvoice = await lnbitsClient.createInvoice(amountSats, memo, webhookUrl);
 

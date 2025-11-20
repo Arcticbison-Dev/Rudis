@@ -26,7 +26,9 @@ export interface IStorage {
   // Invoice operations
   createInvoice(invoice: InsertInvoice): Promise<Invoice>;
   getInvoice(id: string): Promise<Invoice | undefined>;
+  getInvoiceByCheckingId(checkingId: string): Promise<Invoice | undefined>;
   getAllInvoices(): Promise<Invoice[]>;
+  getPendingLightningInvoices(limit?: number): Promise<Invoice[]>;
   updateInvoice(id: string, updates: Partial<Invoice>): Promise<Invoice | undefined>;
   updateInvoiceStatus(id: string, status: string, paidAt?: Date): Promise<Invoice | undefined>;
   checkAndExpireInvoices(): Promise<number>;
@@ -149,6 +151,8 @@ export class MemStorage implements IStorage {
       derivedAddress: (insertInvoice as any).derivedAddress || null,
       subaddress: (insertInvoice as any).subaddress || null,
       paymentSource: (insertInvoice as any).paymentSource || null,
+      lnPaymentHash: (insertInvoice as any).lnPaymentHash || null,
+      lnCheckingId: (insertInvoice as any).lnCheckingId || null,
     };
     
     this.invoices.set(id, invoice);
@@ -159,10 +163,20 @@ export class MemStorage implements IStorage {
     return this.invoices.get(id);
   }
 
+  async getInvoiceByCheckingId(checkingId: string): Promise<Invoice | undefined> {
+    return Array.from(this.invoices.values()).find(inv => inv.lnCheckingId === checkingId);
+  }
+
   async getAllInvoices(): Promise<Invoice[]> {
     return Array.from(this.invoices.values()).sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
+  }
+
+  async getPendingLightningInvoices(limit: number = 100): Promise<Invoice[]> {
+    return Array.from(this.invoices.values())
+      .filter((inv) => inv.currency === "Lightning" && inv.status === "pending" && inv.lnPaymentHash)
+      .slice(0, limit);
   }
 
   async updateInvoice(id: string, updates: Partial<Invoice>): Promise<Invoice | undefined> {
@@ -478,6 +492,8 @@ export class DatabaseStorage implements IStorage {
         derivedAddress: (insertInvoice as any).derivedAddress || null,
         subaddress: (insertInvoice as any).subaddress || null,
         paymentSource: (insertInvoice as any).paymentSource || null,
+        lnPaymentHash: (insertInvoice as any).lnPaymentHash || null,
+        lnCheckingId: (insertInvoice as any).lnCheckingId || null,
         status: "pending",
       })
       .returning();
@@ -489,8 +505,26 @@ export class DatabaseStorage implements IStorage {
     return invoice || undefined;
   }
 
+  async getInvoiceByCheckingId(checkingId: string): Promise<Invoice | undefined> {
+    const [invoice] = await db.select().from(invoices).where(eq(invoices.lnCheckingId, checkingId));
+    return invoice || undefined;
+  }
+
   async getAllInvoices(): Promise<Invoice[]> {
     return await db.select().from(invoices);
+  }
+
+  async getPendingLightningInvoices(limit: number = 100): Promise<Invoice[]> {
+    return await db
+      .select()
+      .from(invoices)
+      .where(
+        and(
+          eq(invoices.currency, "Lightning"),
+          eq(invoices.status, "pending")
+        )
+      )
+      .limit(limit);
   }
 
   async updateInvoice(id: string, updates: Partial<Invoice>): Promise<Invoice | undefined> {

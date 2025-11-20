@@ -1,6 +1,7 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
+import { createLNPoller } from "./ln-poller";
 
 const app = express();
 
@@ -48,6 +49,11 @@ app.use((req, res, next) => {
 
 (async () => {
   const server = await registerRoutes(app);
+
+  // Initialize Lightning Network polling worker (Step 5.2: Polling fallback)
+  // Checks pending LN invoices at regular intervals (fallback to webhooks)
+  // Uses shared config validation (same as LN adapter)
+  createLNPoller();
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
     const status = err.status || err.statusCode || 500;

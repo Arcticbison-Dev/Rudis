@@ -10,6 +10,7 @@ import { getOrchestrator } from "./payment-orchestrator";
 import { PaymentCurrency, type CanonicalPayment } from "@shared/payment-orchestrator";
 import { z } from "zod";
 import * as monitoring from "./monitoring";
+import { confirmLightningPayment } from "./ln-payment-handler";
 
 // Privacy helpers - truncate addresses and txids for logging
 function truncateAddress(address: string | null | undefined): string {
@@ -181,6 +182,52 @@ function authenticateAdminApi(req: Request, res: Response, next: NextFunction) {
   const token = authHeader.substring(7);
   
   if (!token || token.length === 0 || token !== ADMIN_API_TOKEN) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  next();
+}
+
+// Authenticate incoming LNbits webhooks (Step 5.1: Webhook handling)
+// Different from authenticateRailCallback - this validates LNBITS_WEBHOOK_SECRET
+// for webhooks FROM LNbits when invoices are paid
+//
+// Security Model:
+// - LNbits doesn't support HMAC signatures or custom headers
+// - We use URL path-based authentication (similar to Stripe, GitHub, etc.)
+// - Secret token is part of URL path: /rails/ln/webhook/:token
+// - Long random token + HTTPS provides adequate security
+// - Better than query params (which are logged everywhere)
+function authenticateLNbitsWebhook(req: Request, res: Response, next: NextFunction) {
+  const webhookSecret = process.env.LNBITS_WEBHOOK_SECRET;
+  
+  // If webhook secret is not configured, reject all webhook calls
+  if (!webhookSecret || webhookSecret.length === 0) {
+    console.warn("LNbits webhook rejected: LNBITS_WEBHOOK_SECRET not configured");
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  // Extract token from URL path parameter
+  const providedSecret = req.params.token;
+  
+  if (!providedSecret) {
+    console.warn("LNbits webhook rejected: missing token in URL path");
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  // CRITICAL: Check length first to prevent RangeError in timingSafeEqual
+  // Mismatched buffer lengths would throw and expose 500 errors (DoS vector)
+  if (providedSecret.length !== webhookSecret.length) {
+    console.warn("LNbits webhook rejected: invalid secret token length");
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  
+  // Timing-safe comparison to prevent timing attacks
+  if (!crypto.timingSafeEqual(
+    Buffer.from(providedSecret),
+    Buffer.from(webhookSecret)
+  )) {
+    console.warn("LNbits webhook rejected: invalid secret token");
     return res.status(401).json({ error: "Unauthorized" });
   }
   
@@ -1380,6 +1427,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       // Silent error - invoice creation failed (operational detail)
       res.status(500).json({ error: "Failed to create invoice" });
+    }
+  });
+
+  // ============================================================================
+  // LNbits Webhook Endpoint (Step 5.1: Webhook handling)
+  // ============================================================================
+  
+  /**
+   * POST /rails/ln/webhook/:token
+   * 
+   * Incoming webhook from LNbits when a Lightning invoice is paid.
+   * Different from /api/rails/ln/settled (internal rail callback).
+   * 
+   * Security:
+   * - Validates LNBITS_WEBHOOK_SECRET via URL path token (not query param/header)
+   * - Does NOT trust arbitrary invoiceId from payload
+   * - Looks up invoice by checking_id (prevents unauthorized updates)
+   * - Long random token + HTTPS provides adequate security
+   * 
+   * Idempotency:
+   * - Safe to call multiple times for same payment
+   * - Returns 200 OK if already paid (no duplicate transactions)
+   * 
+   * Example URL: https://my-app.com/rails/ln/webhook/abc123def456...
+   */
+  app.post("/rails/ln/webhook/:token", authenticateLNbitsWebhook, async (req, res) => {
+    try {
+      const payload = req.body;
+      
+      // Extract LNbits payment data
+      const {
+        checking_id,
+        payment_hash,
+        pending,
+        amount, // millisatoshis
+        bolt11,
+        time,
+      } = payload;
+      
+      // Validate required fields
+      if (!checking_id || !payment_hash) {
+        console.warn("LNbits webhook rejected: missing checking_id or payment_hash");
+        return res.status(400).json({ error: "Invalid webhook payload" });
+      }
+      
+      // Use shared payment confirmation handler (same logic as poller)
+      const paymentData = {
+        checking_id,
+        payment_hash,
+        pending: pending === 1 || pending === true,
+        amount, // millisatoshis
+      };
+      
+      const confirmed = await confirmLightningPayment(paymentData, "webhook");
+      
+      if (!confirmed) {
+        // Payment was not confirmed (already paid, expired, pending, etc.)
+        // confirmLightningPayment already logged the reason
+        // Return success to acknowledge webhook receipt
+        return res.status(200).json({ message: "Webhook processed" });
+      }
+      
+      // Payment confirmed! Get the invoice for webhook notification
+      const invoices = await storage.getAllInvoices();
+      const invoice = invoices.find(inv => inv.lnCheckingId === checking_id);
+      
+      if (invoice) {
+        // Queue webhook to Altostratus app (if configured)
+        const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
+        if (altWebhookUrl) {
+          const webhookPayload = {
+            invoiceId: invoice.id,
+            status: "confirmed",
+            amount: invoice.amount,
+            currency: invoice.currency,
+            timestamp: new Date().toISOString(),
+          };
+          
+          invoicePayloads.set(invoice.id, webhookPayload);
+          await queueWebhook(invoice.id, altWebhookUrl, webhookPayload);
+        }
+        
+        // Return success
+        res.status(200).json({ 
+          success: true,
+          invoiceId: invoice.id 
+        });
+      } else {
+        // This shouldn't happen (invoice was found in confirmLightningPayment)
+        res.status(200).json({ message: "Payment confirmed but invoice not found" });
+      }
+      
+    } catch (error: any) {
+      console.error("LNbits webhook processing error:", error.message);
+      res.status(500).json({ error: "Webhook processing failed" });
     }
   });
 
