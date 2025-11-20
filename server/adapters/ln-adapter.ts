@@ -393,12 +393,15 @@ export class LnAdapter implements RailAdapter {
   /**
    * Get payment status from LN rail
    * 
-   * Step 1: Reads from database only when LN is disabled/misconfigured
+   * ALWAYS reads from database only - no live RPC calls on read path.
+   * Background workers/webhooks update DB, GET /payments/:id reads from DB.
+   * This works regardless of LNbits configuration status.
    */
   async getPaymentStatus(invoiceId: string): Promise<RailPaymentStatus> {
     // ALWAYS read from database only - no live RPC calls on read path
     // Background workers/webhooks update DB, GET /payments/:id reads from DB
     // This ensures fast response times and no LNbits load on status queries
+    // Works even when LNbits is not configured (DB-only reads)
     return this.getPaymentStatusFromDb(invoiceId);
   }
 

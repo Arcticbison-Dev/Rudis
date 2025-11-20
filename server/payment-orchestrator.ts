@@ -150,7 +150,7 @@ export class PaymentOrchestrator {
   /**
    * Get the current status of a payment
    * 
-   * Reads from database state updated by workers - NO fresh RPC calls.
+   * Delegates to the appropriate rail adapter for DB-only status reads.
    * Workers poll blockchains and update DB via callbacks.
    * 
    * @param currency - Payment currency
@@ -161,8 +161,8 @@ export class PaymentOrchestrator {
     currency: PaymentCurrency,
     invoiceId: string
   ): Promise<CanonicalPayment> {
-    // Validate currency is enabled
-    this.getAdapter(currency); // Throws if not enabled
+    // Get the appropriate adapter
+    const adapter = this.getAdapter(currency);
 
     // Load invoice from storage - this is the source of truth
     const invoice = await storage.getInvoice(invoiceId);
@@ -170,8 +170,8 @@ export class PaymentOrchestrator {
       throw new Error(`Invoice ${invoiceId} not found in storage`);
     }
 
-    // Load payment transactions from storage (updated by rail callbacks)
-    const transactions = await storage.getPaymentTransactionsByInvoice(invoiceId);
+    // Delegate to adapter for rail-specific status logic (DB-only)
+    const railStatus = await adapter.getPaymentStatus(invoiceId);
 
     // Map confirmations required based on currency
     const confirmationsRequired = 
@@ -179,53 +179,20 @@ export class PaymentOrchestrator {
       currency === "BTC" ? 6 : 
       10; // XMR
 
-    // Calculate confirmations from latest transaction
-    let confirmations = 0;
-    let amountReceived = "0";
-    
-    if (transactions.length > 0) {
-      // Use the latest transaction
-      const latestTx = transactions[0]; // Already sorted by confirmedAt DESC
-      confirmations = parseInt(latestTx.confirmations, 10) || 0;
-      
-      // For amount received, sum all transactions (handles multi-payment scenario)
-      // Note: For now we just indicate payment received, exact amount tracking TBD
-      amountReceived = invoice.amount;
-    }
-
-    // Map database status to canonical status
-    let canonicalStatus: CanonicalPayment["status"];
-    if (invoice.status === "confirmed") {
-      canonicalStatus = "confirmed";
-    } else if (invoice.status === "expired") {
-      canonicalStatus = "expired";
-    } else if (invoice.status === "failed") {
-      canonicalStatus = "failed";
-    } else if (confirmations > 0 && confirmations < confirmationsRequired) {
-      canonicalStatus = "confirming"; // Payment seen but not enough confirmations
-    } else {
-      canonicalStatus = "pending";
-    }
-
-    // Build canonical payment from database state only
+    // Build canonical payment from adapter status + invoice data
+    // Fall back to invoice.updatedAt if adapter doesn't provide it (e.g., LN with no LNbits config)
     const payment: CanonicalPayment = {
       invoiceId,
       currency,
       amountAtomic: invoice.amount,
       paymentAddress: invoice.paymentAddress,
-      status: canonicalStatus,
-      confirmations,
+      status: railStatus.status,
+      confirmations: railStatus.confirmations,
       confirmationsRequired,
-      transactions: transactions.map(tx => ({
-        txidHash: tx.transactionId, // Already hashed by rails for privacy
-        amountAtomic: invoice.amount, // Use invoice amount as approximation
-        confirmations: parseInt(tx.confirmations, 10),
-        blockHeight: tx.blockHeight ? parseInt(tx.blockHeight, 10) : undefined,
-        detectedAt: tx.confirmedAt.toISOString(),
-      })),
-      amountReceived,
+      transactions: railStatus.transactions,
+      amountReceived: railStatus.amountReceived,
       createdAt: invoice.createdAt.toISOString(),
-      updatedAt: invoice.updatedAt.toISOString(),
+      updatedAt: railStatus.updatedAt || invoice.updatedAt.toISOString(),
       ...(invoice.expiresAt && { expiresAt: invoice.expiresAt.toISOString() }),
     };
 
