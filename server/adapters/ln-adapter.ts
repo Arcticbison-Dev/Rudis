@@ -161,13 +161,14 @@ export class LnAdapter implements RailAdapter {
       configErrors.push(`Unsupported LN_BACKEND: "${backend}". Only "lnbits" is supported.`);
     }
     
+    // SECURITY (Step 7.1): Generic error messages - don't expose secret names
     // Validate required LNbits configuration
     if (enabled && !lnbitsApiUrl) {
-      configErrors.push("LNBITS_API_URL is required when ENABLE_LN=true");
+      configErrors.push("LNbits API URL is required when ENABLE_LN=true");
     }
     
     if (enabled && !lnbitsWalletKey) {
-      configErrors.push("LNBITS_WALLET_KEY is required when ENABLE_LN=true");
+      configErrors.push("LNbits wallet authentication is required when ENABLE_LN=true");
     }
     
     // Validate amount limits

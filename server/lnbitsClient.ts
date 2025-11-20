@@ -243,12 +243,13 @@ export class LNbitsClient {
  * Throws if required configuration is missing.
  */
 export function createLNbitsClient(config: LNbitsClientConfig): LNbitsClient {
+  // SECURITY (Step 7.1): Generic error messages - don't expose secret names
   if (!config.apiUrl) {
-    throw new Error("LNBITS_API_URL is required to create LNbits client");
+    throw new Error("LNbits API URL is required to create LNbits client");
   }
 
   if (!config.walletKey) {
-    throw new Error("LNBITS_WALLET_KEY is required to create LNbits client");
+    throw new Error("LNbits wallet authentication is required to create LNbits client");
   }
 
   return new LNbitsClient(config);

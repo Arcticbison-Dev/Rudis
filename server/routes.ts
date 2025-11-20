@@ -201,9 +201,10 @@ function authenticateAdminApi(req: Request, res: Response, next: NextFunction) {
 function authenticateLNbitsWebhook(req: Request, res: Response, next: NextFunction) {
   const webhookSecret = process.env.LNBITS_WEBHOOK_SECRET;
   
+  // SECURITY (Step 7.1): Generic error messages - don't expose secret names
   // If webhook secret is not configured, reject all webhook calls
   if (!webhookSecret || webhookSecret.length === 0) {
-    console.warn("LNbits webhook rejected: LNBITS_WEBHOOK_SECRET not configured");
+    console.warn("LNbits webhook rejected: webhook authentication not configured");
     return res.status(401).json({ error: "Unauthorized" });
   }
   
