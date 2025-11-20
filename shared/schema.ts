@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, decimal, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, decimal, timestamp, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -24,7 +24,10 @@ export const invoices = pgTable("invoices", {
   // Lightning Network specific fields
   lnPaymentHash: text("ln_payment_hash"),
   lnCheckingId: text("ln_checking_id"),
-});
+}, (table) => ({
+  // Index for efficient Lightning Network invoice lookups
+  lnCheckingIdIdx: index("ln_checking_id_idx").on(table.lnCheckingId),
+}));
 
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({
   id: true,
