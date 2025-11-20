@@ -396,13 +396,9 @@ export class LnAdapter implements RailAdapter {
    * Step 1: Reads from database only when LN is disabled/misconfigured
    */
   async getPaymentStatus(invoiceId: string): Promise<RailPaymentStatus> {
-    // Read from database only if LN is disabled or misconfigured
-    if (!this.isEnabled) {
-      return this.getPaymentStatusFromDb(invoiceId);
-    }
-
-    // TODO: Implement actual LNbits API call (Step 2)
-    // For now, fallback to database
+    // ALWAYS read from database only - no live RPC calls on read path
+    // Background workers/webhooks update DB, GET /payments/:id reads from DB
+    // This ensures fast response times and no LNbits load on status queries
     return this.getPaymentStatusFromDb(invoiceId);
   }
 

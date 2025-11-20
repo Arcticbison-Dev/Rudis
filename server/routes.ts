@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { insertInvoiceSchema, insertTemplateSchema, paymentConfirmationSchema, type Invoice } from "@shared/schema";
 import { paymentConfirmationSchema as legacyPaymentConfirmationSchema } from "@shared/webhook-schema";
 import axios, { AxiosError } from "axios";
-import crypto from "crypto";
+import crypto, { randomUUID } from "crypto";
 import rateLimit from "express-rate-limit";
 import { getOrchestrator } from "./payment-orchestrator";
 import { PaymentCurrency, type CanonicalPayment } from "@shared/payment-orchestrator";
@@ -240,6 +240,10 @@ interface PaymentApiResponse {
   expires_at?: string;
   /** BOLT11 invoice (Lightning only) */
   invoice_bolt11?: string;
+  /** When payment was confirmed (all rails) */
+  paid_at?: string;
+  /** Exact amount paid in atomic units (Lightning only) */
+  amount_paid_atomic?: string;
 }
 
 /**
@@ -268,12 +272,22 @@ async function canonicalToApiResponse(payment: CanonicalPayment): Promise<Paymen
     ...(payment.expiresAt && { expires_at: payment.expiresAt }),
   };
   
-  // For Lightning payments, include BOLT11 invoice from database
-  if (payment.currency === "LN") {
-    const invoice = await storage.getInvoice(payment.invoiceId);
-    if (invoice?.bolt11Invoice) {
+  // Fetch invoice once for additional fields
+  const invoice = await storage.getInvoice(payment.invoiceId);
+  
+  // For Lightning payments, include LN-specific fields from database
+  if (payment.currency === "LN" && invoice) {
+    if (invoice.bolt11Invoice) {
       response.invoice_bolt11 = invoice.bolt11Invoice;
     }
+    if (invoice.amountPaidAtomic) {
+      response.amount_paid_atomic = invoice.amountPaidAtomic;
+    }
+  }
+  
+  // Add paid_at timestamp for all rails (if payment confirmed)
+  if (payment.status === "confirmed" && invoice?.paidAt) {
+    response.paid_at = invoice.paidAt.toISOString();
   }
   
   return response;
@@ -1030,7 +1044,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Create payment address via orchestrator FIRST
       // This ensures we have all data before creating the invoice (atomic)
       // Generate temporary ID for adapter to use
-      const tempInvoiceId = randomUUID();
+      const tempInvoiceId = crypto.randomUUID();
       
       const payment = await orchestrator.createPayment(rail, {
         invoiceId: tempInvoiceId,
