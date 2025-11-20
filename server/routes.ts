@@ -1440,10 +1440,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
    * Incoming webhook from LNbits when a Lightning invoice is paid.
    * Different from /api/rails/ln/settled (internal rail callback).
    * 
-   * Security:
+   * Security (Step 7: Security & Privacy):
    * - Validates LNBITS_WEBHOOK_SECRET via URL path token (not query param/header)
+   * - Strict input validation: rejects malformed/unexpected payloads
    * - Does NOT trust arbitrary invoiceId from payload
    * - Looks up invoice by checking_id (prevents unauthorized updates)
+   * - Only extracts fields needed for matching & status
    * - Long random token + HTTPS provides adequate security
    * 
    * Idempotency:
@@ -1456,20 +1458,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const payload = req.body;
       
-      // Extract LNbits payment data
+      // SECURITY (Step 7.2): Strict input validation - reject invalid types
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        console.warn("LNbits webhook rejected: invalid payload format (not an object)");
+        return res.status(400).json({ error: "Invalid webhook payload" });
+      }
+      
+      // Extract ONLY the fields we need for matching & status
+      // Ignore all other fields to prevent injection attacks
       const {
         checking_id,
         payment_hash,
         pending,
         amount, // millisatoshis
-        bolt11,
-        time,
       } = payload;
       
-      // Validate required fields
-      if (!checking_id || !payment_hash) {
-        console.warn("LNbits webhook rejected: missing checking_id or payment_hash");
+      // Validate required fields exist and have correct types
+      if (!checking_id || typeof checking_id !== "string") {
+        console.warn("LNbits webhook rejected: invalid or missing checking_id");
         return res.status(400).json({ error: "Invalid webhook payload" });
+      }
+      
+      if (!payment_hash || typeof payment_hash !== "string") {
+        console.warn("LNbits webhook rejected: invalid or missing payment_hash");
+        return res.status(400).json({ error: "Invalid webhook payload" });
+      }
+      
+      // Validate checking_id format (prevent injection)
+      // LNbits checking_id format: alphanumeric + hyphens/underscores
+      if (!/^[a-zA-Z0-9_-]+$/.test(checking_id)) {
+        console.warn("LNbits webhook rejected: invalid checking_id format");
+        return res.status(400).json({ error: "Invalid webhook payload" });
+      }
+      
+      // Validate payment_hash format (64 hex chars)
+      if (!/^[a-f0-9]{64}$/i.test(payment_hash)) {
+        console.warn("LNbits webhook rejected: invalid payment_hash format");
+        return res.status(400).json({ error: "Invalid webhook payload" });
+      }
+      
+      // Validate amount if present (must be positive integer)
+      if (amount !== undefined && amount !== null) {
+        if (typeof amount !== "number" || amount <= 0 || !Number.isInteger(amount)) {
+          console.warn("LNbits webhook rejected: invalid amount (must be positive integer)");
+          return res.status(400).json({ error: "Invalid webhook payload" });
+        }
       }
       
       // Use shared payment confirmation handler (same logic as poller)
