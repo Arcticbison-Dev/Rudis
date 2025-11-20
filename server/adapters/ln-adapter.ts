@@ -18,7 +18,7 @@ import {
   PaymentNotFoundError,
 } from "../../shared/payment-orchestrator";
 import { storage } from "../storage";
-import { logPaymentCreateFailed } from "../monitoring";
+import { logPaymentCreateFailed, logConfigError } from "../monitoring";
 
 /**
  * LN rail service response types (rail-specific)
@@ -43,30 +43,57 @@ interface LnHealthResponse {
 /**
  * Lightning Network Configuration
  * 
- * Future Backend Support (reserved env vars):
- * - LN_BACKEND: Backend type (lnd, cln, lnbits, eclair) - not yet used
- * - LN_RPC_URL: RPC endpoint for Lightning backend - not yet used
- * - LN_MACAROON: LND macaroon (hex-encoded) - not yet used
- * - LN_API_KEY: API key for backends like LNbits - not yet used
- * - LN_CERT: TLS certificate path for LND - not yet used
+ * Direct LNbits Integration (current implementation):
+ * - LN_BACKEND: Backend type (only "lnbits" supported)
+ * - LNBITS_API_URL: LNbits API endpoint
+ * - LNBITS_WALLET_KEY: LNbits wallet invoice/read key
+ * - LNBITS_WALLET_ID: Optional wallet ID for multi-wallet setups
+ * - LN_MIN_AMOUNT_SATS: Minimum invoice amount in satoshis
+ * - LN_MAX_AMOUNT_SATS: Maximum invoice amount in satoshis
+ * - LN_HTTP_TIMEOUT: HTTP timeout for API calls (ms)
+ * - LN_INVOICE_EXPIRY: Invoice expiration time (seconds)
+ * - LN_POLL_INTERVAL_MS: Poll interval for checking invoices (ms)
  * 
- * Current Implementation:
- * - LN_SERVICE_URL: URL of rail-ln service (microservice architecture)
- * - RAIL_AUTH_TOKEN: Authentication token for rail services
- * - ENABLE_LN: Enable Lightning Network rail (default: false)
+ * Webhooks (optional):
+ * - LNBITS_WEBHOOK_URL: Webhook endpoint for payment notifications
+ * - LNBITS_WEBHOOK_SECRET: Secret for HMAC webhook verification
+ * - LNBITS_WEBHOOK_TIMEOUT_MS: Webhook timeout (ms)
+ * 
+ * LND Backend (used by LNbits, NOT by this app):
+ * - LND_GRPC_HOST: LND gRPC host
+ * - LND_TLS_CERT_BASE64: LND TLS certificate (base64)
+ * - LND_INVOICE_MACAROON: LND invoice macaroon
+ * - LND_NETWORK: LND network (mainnet/testnet/regtest)
  */
 interface LnConfig {
-  // Future backend configuration (reserved, not yet implemented)
-  backend?: "lnd" | "cln" | "lnbits" | "eclair";
-  rpcUrl?: string;
-  macaroon?: string;
-  apiKey?: string;
-  certPath?: string;
+  // Rail configuration
+  enabled: boolean;
+  backend: string;
   
-  // Current microservice architecture
-  serviceUrl: string;
-  authToken: string;
-  serviceConfigured: boolean;
+  // LNbits API configuration
+  lnbitsApiUrl: string | null;
+  lnbitsWalletKey: string | null;
+  lnbitsWalletId: string | null;
+  
+  // Amount limits and timeouts
+  minAmountSats: number;
+  maxAmountSats: number;
+  httpTimeout: number;
+  invoiceExpiry: number;
+  pollInterval: number;
+  
+  // Webhook configuration (optional)
+  webhookUrl: string | null;
+  webhookSecret: string | null;
+  webhookTimeout: number;
+  
+  // Debug logging
+  debugLogging: boolean;
+  logApiBodies: boolean;
+  
+  // Configuration state
+  isConfigured: boolean;
+  configErrors: string[];
 }
 
 /**
@@ -94,237 +121,232 @@ export class LnAdapter implements RailAdapter {
   
   /**
    * Load Lightning Network configuration from environment
+   * Implements Step 1: LN Rail Bootstrapping & Config
    */
   private loadConfig(): LnConfig {
+    const configErrors: string[] = [];
+    
+    // 1. Feature flag
+    const enabled = process.env.ENABLE_LN === "true";
+    
+    // 2. Backend selection
+    const backend = process.env.LN_BACKEND || "lnbits";
+    
+    // 3. LNbits API configuration
+    const lnbitsApiUrl = process.env.LNBITS_API_URL || null;
+    const lnbitsWalletKey = process.env.LNBITS_WALLET_KEY || null;
+    const lnbitsWalletId = process.env.LNBITS_WALLET_ID || null;
+    
+    // 4. Optional knobs - Amount limits
+    const minAmountSats = parseInt(process.env.LN_MIN_AMOUNT_SATS || "1", 10);
+    const maxAmountSats = parseInt(process.env.LN_MAX_AMOUNT_SATS || "100000", 10);
+    
+    // 5. Optional knobs - Timeouts
+    const httpTimeout = parseInt(process.env.LN_HTTP_TIMEOUT || "5000", 10);
+    const invoiceExpiry = parseInt(process.env.LN_INVOICE_EXPIRY || "3600", 10);
+    const pollInterval = parseInt(process.env.LN_POLL_INTERVAL_MS || "10000", 10);
+    
+    // 6. Webhook configuration (optional)
+    const webhookUrl = process.env.LNBITS_WEBHOOK_URL || null;
+    const webhookSecret = process.env.LNBITS_WEBHOOK_SECRET || null;
+    const webhookTimeout = parseInt(process.env.LNBITS_WEBHOOK_TIMEOUT_MS || "5000", 10);
+    
+    // 7. Debug logging
+    const debugLogging = process.env.LN_DEBUG_LOGGING === "true";
+    const logApiBodies = process.env.LN_LOG_API_BODIES === "true";
+    
+    // Validate backend selection
+    if (enabled && backend !== "lnbits") {
+      configErrors.push(`Unsupported LN_BACKEND: "${backend}". Only "lnbits" is supported.`);
+    }
+    
+    // Validate required LNbits configuration
+    if (enabled && !lnbitsApiUrl) {
+      configErrors.push("LNBITS_API_URL is required when ENABLE_LN=true");
+    }
+    
+    if (enabled && !lnbitsWalletKey) {
+      configErrors.push("LNBITS_WALLET_KEY is required when ENABLE_LN=true");
+    }
+    
+    // Validate amount limits
+    if (minAmountSats < 1) {
+      configErrors.push(`LN_MIN_AMOUNT_SATS must be >= 1 (got ${minAmountSats})`);
+    }
+    
+    if (maxAmountSats < minAmountSats) {
+      configErrors.push(`LN_MAX_AMOUNT_SATS (${maxAmountSats}) must be >= LN_MIN_AMOUNT_SATS (${minAmountSats})`);
+    }
+    
+    const isConfigured = enabled && lnbitsApiUrl !== null && lnbitsWalletKey !== null && configErrors.length === 0;
+    
     return {
-      // Future backend configuration (reserved)
-      backend: (process.env.LN_BACKEND as LnConfig["backend"]) || undefined,
-      rpcUrl: process.env.LN_RPC_URL || undefined,
-      macaroon: process.env.LN_MACAROON || undefined,
-      apiKey: process.env.LN_API_KEY || undefined,
-      certPath: process.env.LN_CERT || undefined,
-      
-      // Current microservice architecture
-      serviceUrl: process.env.LN_SERVICE_URL || "http://localhost:5001",
-      authToken: process.env.RAIL_AUTH_TOKEN || "",
-      serviceConfigured: !!process.env.LN_SERVICE_URL,
+      enabled,
+      backend,
+      lnbitsApiUrl,
+      lnbitsWalletKey,
+      lnbitsWalletId,
+      minAmountSats,
+      maxAmountSats,
+      httpTimeout,
+      invoiceExpiry,
+      pollInterval,
+      webhookUrl,
+      webhookSecret,
+      webhookTimeout,
+      debugLogging,
+      logApiBodies,
+      isConfigured,
+      configErrors,
     };
   }
   
   /**
    * Validate Lightning Network configuration on startup
-   * 
-   * Logs clear errors if LN_BACKEND is set but required vars are missing.
-   * This helps developers catch configuration issues early.
+   * Implements Step 1: Startup validation with clear error logging
    */
   private validateConfig(): void {
-    // Check for future backend configuration (not yet implemented)
-    if (this.config.backend) {
-      console.warn("╔═══════════════════════════════════════════════════════════╗");
-      console.warn("║ ⚠️  LN Backend Configuration Detected (Not Implemented)  ║");
-      console.warn("╠═══════════════════════════════════════════════════════════╣");
-      console.warn(`║ LN_BACKEND=${this.config.backend} is set but not yet supported.     ║`);
-      console.warn("║ The system will use microservice architecture (rail-ln). ║");
-      console.warn("║                                                           ║");
-      console.warn("║ Future backend support planned for:                      ║");
-      console.warn("║ - lnd: Lightning Network Daemon (LND)                    ║");
-      console.warn("║ - cln: Core Lightning (CLN)                              ║");
-      console.warn("║ - lnbits: LNbits wallet                                  ║");
-      console.warn("║ - eclair: ACINQ Eclair                                   ║");
-      console.warn("║                                                           ║");
-      console.warn("║ Required environment variables per backend:              ║");
-      console.warn("║ LND:    LN_RPC_URL, LN_MACAROON, LN_CERT                 ║");
-      console.warn("║ CLN:    LN_RPC_URL                                       ║");
-      console.warn("║ LNbits: LN_RPC_URL, LN_API_KEY                           ║");
-      console.warn("║ Eclair: LN_RPC_URL, LN_API_KEY                           ║");
-      console.warn("╚═══════════════════════════════════════════════════════════╝");
+    // If LN is disabled, log and return
+    if (!this.config.enabled) {
+      console.log("╔═══════════════════════════════════════════════════════════╗");
+      console.log("║ Lightning Network Rail: DISABLED                         ║");
+      console.log("╠═══════════════════════════════════════════════════════════╣");
+      console.log("║ Set ENABLE_LN=true to enable Lightning payments          ║");
+      console.log("╚═══════════════════════════════════════════════════════════╝");
+      return;
+    }
+    
+    // LN is enabled - validate configuration
+    console.log("╔═══════════════════════════════════════════════════════════╗");
+    console.log("║ Lightning Network Rail: ENABLED                          ║");
+    console.log("╠═══════════════════════════════════════════════════════════╣");
+    
+    // Check for configuration errors
+    if (this.config.configErrors.length > 0) {
+      console.error("║ ❌ CONFIGURATION ERRORS DETECTED                          ║");
+      console.error("╠═══════════════════════════════════════════════════════════╣");
       
-      // Check if required vars are set (for future use)
-      const missingVars = this.getMissingBackendVars();
-      if (missingVars.length > 0) {
-        console.warn(`⚠️ Missing environment variables for ${this.config.backend}: ${missingVars.join(", ")}`);
-        console.warn("⚠️ These will be required when backend support is implemented.");
+      for (const error of this.config.configErrors) {
+        const padding = " ".repeat(Math.max(0, 59 - error.length));
+        console.error(`║ • ${error}${padding}║`);
       }
+      
+      console.error("╠═══════════════════════════════════════════════════════════╣");
+      console.error("║ Lightning rail will be DISABLED due to invalid config    ║");
+      console.error("╚═══════════════════════════════════════════════════════════╝");
+      
+      // Log structured error event
+      logConfigError("LN", this.config.configErrors, "Lightning Network configuration validation failed");
+      
+      // Mark as not configured so rail returns disabled errors
+      this.config.isConfigured = false;
+      return;
     }
     
-    // Current microservice architecture validation
-    if (!this.config.authToken) {
-      console.warn("⚠️ LN Adapter: RAIL_AUTH_TOKEN not set - authentication disabled");
-    }
+    // Configuration is valid - log success
+    console.log(`║ Backend:         ${this.config.backend}                                    ║`);
+    console.log(`║ API URL:         ${this.config.lnbitsApiUrl?.substring(0, 40) || "not set"}...       ║`);
+    console.log(`║ Amount Range:    ${this.config.minAmountSats}-${this.config.maxAmountSats} sats                        ║`);
+    console.log(`║ Invoice Expiry:  ${this.config.invoiceExpiry}s (${this.config.invoiceExpiry / 60} min)                    ║`);
+    console.log(`║ HTTP Timeout:    ${this.config.httpTimeout}ms                                ║`);
+    console.log(`║ Poll Interval:   ${this.config.pollInterval}ms                               ║`);
     
-    if (!this.config.serviceConfigured) {
-      console.warn("⚠️ LN Adapter: LN_SERVICE_URL not configured - running in stub mode");
-      console.warn("   Set LN_SERVICE_URL to enable Lightning Network payments");
+    if (this.config.webhookUrl) {
+      console.log("║ Webhooks:        ENABLED (primary detection)              ║");
+      console.log("║ Polling:         ENABLED (safety net)                     ║");
     } else {
-      console.log(`✓ LN Adapter: Service configured at ${this.config.serviceUrl}`);
-    }
-  }
-  
-  /**
-   * Get missing environment variables for the configured backend
-   * (Reserved for future implementation)
-   */
-  private getMissingBackendVars(): string[] {
-    if (!this.config.backend) return [];
-    
-    const missing: string[] = [];
-    
-    switch (this.config.backend) {
-      case "lnd":
-        if (!this.config.rpcUrl) missing.push("LN_RPC_URL");
-        if (!this.config.macaroon) missing.push("LN_MACAROON");
-        if (!this.config.certPath) missing.push("LN_CERT");
-        break;
-      case "cln":
-        if (!this.config.rpcUrl) missing.push("LN_RPC_URL");
-        break;
-      case "lnbits":
-      case "eclair":
-        if (!this.config.rpcUrl) missing.push("LN_RPC_URL");
-        if (!this.config.apiKey) missing.push("LN_API_KEY");
-        break;
+      console.log("║ Webhooks:        DISABLED                                  ║");
+      console.log("║ Polling:         ENABLED (primary detection)              ║");
     }
     
-    return missing;
+    if (this.config.debugLogging) {
+      console.log("║ Debug Logging:   ENABLED (disable in production!)         ║");
+    }
+    
+    console.log("║                                                           ║");
+    console.log("║ ✓ Lightning Network ready for invoice generation         ║");
+    console.log("╚═══════════════════════════════════════════════════════════╝");
   }
   
   /**
-   * Get service URL (current implementation uses microservice)
+   * Check if LN rail is enabled and configured
    */
-  private get serviceUrl(): string {
-    return this.config.serviceUrl;
-  }
-  
-  /**
-   * Get auth token
-   */
-  private get authToken(): string {
-    return this.config.authToken;
-  }
-  
-  /**
-   * Check if service is configured
-   */
-  private get serviceConfigured(): boolean {
-    return this.config.serviceConfigured;
+  private get isEnabled(): boolean {
+    return this.config.enabled && this.config.isConfigured;
   }
 
   /**
    * Create a Lightning invoice
    * 
-   * Safe-stubbed: Returns controlled error when LN service not configured.
-   * This prevents crashes while LN integration is in progress.
+   * Implements Step 1: Returns ln_disabled error when ENABLE_LN=false
+   * Returns ln_config_invalid error when configuration is invalid
    */
   async createPayment(request: CreatePaymentRequest): Promise<CreatePaymentResponse> {
-    // Safe-stub: Return controlled error if service not configured
-    if (!this.serviceConfigured) {
-      // Log payment creation failure in stub mode with rail='ln'
+    // Step 1: Check if LN is disabled
+    if (!this.config.enabled) {
       logPaymentCreateFailed(
         "LN",
         request.invoiceId,
-        "ln_not_implemented",
-        "Lightning Network service (LN_SERVICE_URL) is not configured"
+        "ln_disabled",
+        "Lightning Network rail is disabled (ENABLE_LN=false)"
       );
       
       throw new RailUnavailableError("LN", {
         operation: "createPayment",
-        reason: "ln_not_implemented",
-        details: "Lightning Network service (LN_SERVICE_URL) is not configured. Set LN_SERVICE_URL to enable LN payments.",
+        reason: "ln_disabled",
+        details: "Lightning Network rail is disabled. Set ENABLE_LN=true to enable LN payments.",
+        invoiceId: request.invoiceId,
+      });
+    }
+    
+    // Step 1: Check if configuration is invalid
+    if (!this.config.isConfigured) {
+      logPaymentCreateFailed(
+        "LN",
+        request.invoiceId,
+        "ln_config_invalid",
+        this.config.configErrors.join("; ")
+      );
+      
+      throw new RailUnavailableError("LN", {
+        operation: "createPayment",
+        reason: "ln_config_invalid",
+        details: `Lightning Network configuration is invalid: ${this.config.configErrors.join("; ")}`,
         invoiceId: request.invoiceId,
       });
     }
 
-    try {
-      const response = await axios.post<LnCreateResponse>(
-        `${this.serviceUrl}/create`,
-        {
-          invoiceId: request.invoiceId,
-          amountMsat: request.amountAtomic,
-          memo: request.metadata?.memo || "Altostratus Payment",
-        },
-        {
-          headers: {
-            "Content-Type": "application/json",
-            ...(this.authToken && { Authorization: `Bearer ${this.authToken}` }),
-          },
-          timeout: 10000,
-        }
-      );
-
-      return {
-        paymentAddress: response.data.paymentRequest, // BOLT11 invoice
-        confirmationsRequired: this.confirmationsRequired,
-        expiresAt: response.data.expiresAt,
-        metadata: {
-          paymentHash: response.data.paymentHash,
-        },
-      };
-    } catch (error) {
-      this.handleError(error, "createPayment");
-      throw error;
-    }
+    // TODO: Implement actual LNbits API call (Step 2)
+    // For now, throw not implemented error
+    logPaymentCreateFailed(
+      "LN",
+      request.invoiceId,
+      "ln_not_implemented",
+      "LNbits integration not yet implemented"
+    );
+    
+    throw new RailUnavailableError("LN", {
+      operation: "createPayment",
+      reason: "ln_not_implemented",
+      details: "LNbits invoice creation not yet implemented. Coming in Step 2.",
+      invoiceId: request.invoiceId,
+    });
   }
 
   /**
    * Get payment status from LN rail
    * 
-   * Safe-stubbed: Reads from database only when LN service not configured.
-   * This allows status checks without requiring live service connection.
+   * Step 1: Reads from database only when LN is disabled/misconfigured
    */
   async getPaymentStatus(invoiceId: string): Promise<RailPaymentStatus> {
-    // Safe-stub: Read from database only if service not configured
-    if (!this.serviceConfigured) {
+    // Read from database only if LN is disabled or misconfigured
+    if (!this.isEnabled) {
       return this.getPaymentStatusFromDb(invoiceId);
     }
 
-    try {
-      const response = await axios.get<LnStatusResponse>(
-        `${this.serviceUrl}/status/${invoiceId}`,
-        {
-          headers: {
-            ...(this.authToken && { Authorization: `Bearer ${this.authToken}` }),
-          },
-          timeout: 10000,
-        }
-      );
-
-      const data = response.data;
-
-      // Map LN status to canonical status
-      let status: RailPaymentStatus["status"];
-      if (data.status === "expired") {
-        status = "expired";
-      } else if (data.status === "settled") {
-        status = "confirmed"; // LN settlement = confirmed (instant)
-      } else {
-        status = "pending";
-      }
-
-      // Build transaction if settled
-      const transactions: BlockchainTransaction[] = [];
-      if (data.status === "settled" && data.settledAt) {
-        transactions.push({
-          txidHash: this.hashInvoiceId(invoiceId), // Use invoiceId as pseudo-txid
-          amountAtomic: data.amountReceivedMsat,
-          confirmations: 0, // LN is 0-conf
-          detectedAt: data.settledAt,
-        });
-      }
-
-      return {
-        status,
-        confirmations: 0, // LN is always 0-conf
-        amountReceived: data.amountReceivedMsat,
-        transactions,
-        updatedAt: new Date().toISOString(),
-      };
-    } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 404) {
-        throw new PaymentNotFoundError(invoiceId);
-      }
-      this.handleError(error, "getPaymentStatus");
-      throw error;
-    }
+    // TODO: Implement actual LNbits API call (Step 2)
+    // For now, fallback to database
+    return this.getPaymentStatusFromDb(invoiceId);
   }
 
   /**
@@ -378,62 +400,47 @@ export class LnAdapter implements RailAdapter {
   /**
    * Check LN rail health
    * 
-   * Safe-stubbed: Returns service unavailable when not configured.
+   * Step 1: Returns appropriate status based on configuration state
    */
   async healthCheck(): Promise<RailHealth> {
-    // Safe-stub: Return unavailable if service not configured
-    if (!this.serviceConfigured) {
+    // Return disabled status if LN is disabled
+    if (!this.config.enabled) {
       return {
         ok: false,
         rail: "LN",
-        error: "LN service not configured (LN_SERVICE_URL not set)",
+        error: "Lightning Network rail is disabled (ENABLE_LN=false)",
+        backendStatus: "disabled",
+      };
+    }
+    
+    // Return config error if misconfigured
+    if (!this.config.isConfigured) {
+      return {
+        ok: false,
+        rail: "LN",
+        error: `Configuration invalid: ${this.config.configErrors.join("; ")}`,
         backendStatus: "not_configured",
       };
     }
 
-    try {
-      const response = await axios.get<LnHealthResponse>(
-        `${this.serviceUrl}/health`,
-        { timeout: 5000 }
-      );
-
-      return {
-        ok: response.data.ok,
-        rail: "LN",
-        backendStatus: response.data.lnd,
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        rail: "LN",
-        error: error instanceof Error ? error.message : "Unknown error",
-      };
-    }
+    // TODO: Implement actual LNbits health check (Step 2)
+    return {
+      ok: false,
+      rail: "LN",
+      error: "LNbits health check not yet implemented",
+      backendStatus: "not_implemented",
+    };
   }
 
   /**
    * Cancel a Lightning invoice (optional feature)
    * 
-   * Note: LND supports invoice cancellation via CancelInvoice RPC
+   * Step 1: Not yet implemented for LNbits
    */
   async cancelPayment(invoiceId: string): Promise<boolean> {
-    try {
-      await axios.post(
-        `${this.serviceUrl}/cancel`,
-        { invoiceId },
-        {
-          headers: {
-            "Content-Type": "application/json",
-            ...(this.authToken && { Authorization: `Bearer ${this.authToken}` }),
-          },
-          timeout: 10000,
-        }
-      );
-      return true;
-    } catch (error) {
-      console.error(`Failed to cancel LN invoice ${invoiceId}:`, error);
-      return false;
-    }
+    // TODO: Implement LNbits invoice cancellation (if supported)
+    console.warn(`LN invoice cancellation not yet implemented for ${invoiceId}`);
+    return false;
   }
 
   /**
