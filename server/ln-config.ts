@@ -57,18 +57,21 @@ export function validateLNConfig(): LNConfigValidationResult {
     return { config, isValid: true, errors: [] };
   }
 
+  // SECURITY (Step 7.1): Don't expose secret names in error messages
+  // Generic errors prevent leaking which specific secrets are configured/missing
+  
   // Required fields when ENABLE_LN=true
   if (!config.lnbitsApiUrl) {
-    errors.push("LNBITS_API_URL is required when ENABLE_LN=true");
+    errors.push("LNbits API URL is required when ENABLE_LN=true");
   }
 
   if (!config.lnbitsWalletKey) {
-    errors.push("LNBITS_WALLET_KEY is required when ENABLE_LN=true");
+    errors.push("LNbits wallet authentication is required when ENABLE_LN=true");
   }
 
   // Webhook secret must be at least 32 characters (security requirement)
   if (config.lnbitsWebhookSecret && config.lnbitsWebhookSecret.length < 32) {
-    errors.push("LNBITS_WEBHOOK_SECRET must be at least 32 characters");
+    errors.push("Webhook authentication secret must be at least 32 characters");
   }
 
   // Amount limits validation

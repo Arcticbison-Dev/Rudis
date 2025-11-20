@@ -1303,11 +1303,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============================================================================
   
   // Get all invoices
+  // SECURITY (Step 7.3): Filter response - no internal fields exposed
   app.get("/api/invoices", async (req, res) => {
     try {
       await storage.checkAndExpireInvoices();
       const invoices = await storage.getAllInvoices();
-      res.json(invoices);
+      
+      // SECURITY: Filter out internal LN metadata from public response
+      const publicInvoices = invoices.map(invoice => ({
+        id: invoice.id,
+        currency: invoice.currency,
+        asset: invoice.asset,
+        amount: invoice.amount,
+        status: invoice.status,
+        paymentAddress: invoice.paymentAddress,
+        createdAt: invoice.createdAt,
+        updatedAt: invoice.updatedAt,
+        expiresAt: invoice.expiresAt || undefined,
+        paidAt: invoice.paidAt || undefined,
+        // Include BOLT11 for Lightning (users need this to pay)
+        ...(invoice.bolt11Invoice && { bolt11Invoice: invoice.bolt11Invoice }),
+        // Include amount paid for confirmed invoices
+        ...(invoice.amountPaidAtomic && { amountPaidAtomic: invoice.amountPaidAtomic }),
+        // Include description if present
+        ...(invoice.description && { description: invoice.description }),
+      }));
+      
+      res.json(publicInvoices);
     } catch (error: any) {
       // Silent error - endpoint returns 500 to client
       res.status(500).json({ error: "Failed to fetch invoices" });
@@ -1315,6 +1337,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Get invoice by ID
+  // SECURITY (Step 7.3): Filter response - no internal fields exposed
   app.get("/api/invoices/:id", async (req, res) => {
     try {
       await storage.checkAndExpireInvoices();
@@ -1322,7 +1345,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!invoice) {
         return res.status(404).json({ error: "Invoice not found" });
       }
-      res.json(invoice);
+      
+      // SECURITY: Only return public-safe fields
+      // DO NOT expose: lnCheckingId, lnPaymentHash (internal LN metadata)
+      const publicInvoice = {
+        id: invoice.id,
+        currency: invoice.currency,
+        asset: invoice.asset,
+        amount: invoice.amount,
+        status: invoice.status,
+        paymentAddress: invoice.paymentAddress,
+        createdAt: invoice.createdAt,
+        updatedAt: invoice.updatedAt,
+        expiresAt: invoice.expiresAt || undefined,
+        paidAt: invoice.paidAt || undefined,
+        // Include BOLT11 for Lightning (users need this to pay)
+        ...(invoice.bolt11Invoice && { bolt11Invoice: invoice.bolt11Invoice }),
+        // Include amount paid for confirmed invoices
+        ...(invoice.amountPaidAtomic && { amountPaidAtomic: invoice.amountPaidAtomic }),
+        // Include description if present
+        ...(invoice.description && { description: invoice.description }),
+      };
+      
+      res.json(publicInvoice);
     } catch (error: any) {
       // Silent error - endpoint returns 500 to client
       res.status(500).json({ error: "Failed to fetch invoice" });
