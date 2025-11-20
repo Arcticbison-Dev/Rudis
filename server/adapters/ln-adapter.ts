@@ -17,8 +17,9 @@ import {
   RailUnavailableError,
   PaymentNotFoundError,
 } from "../../shared/payment-orchestrator";
-import { storage } from "../storage";
-import { logPaymentCreateFailed, logConfigError } from "../monitoring";
+import { storage } from "../storage"; // Only used in getPaymentStatus fallback
+import { logPaymentCreateFailed, logConfigError, logPaymentCreated } from "../monitoring";
+import { createLNbitsClient } from "../lnbitsClient";
 
 /**
  * LN rail service response types (rail-specific)
@@ -278,8 +279,7 @@ export class LnAdapter implements RailAdapter {
   /**
    * Create a Lightning invoice
    * 
-   * Implements Step 1: Returns ln_disabled error when ENABLE_LN=false
-   * Returns ln_config_invalid error when configuration is invalid
+   * Step 3: Complete implementation with amount validation, LNbits integration, and DB write
    */
   async createPayment(request: CreatePaymentRequest): Promise<CreatePaymentResponse> {
     // Step 1: Check if LN is disabled
@@ -316,21 +316,78 @@ export class LnAdapter implements RailAdapter {
       });
     }
 
-    // TODO: Implement actual LNbits API call (Step 2)
-    // For now, throw not implemented error
-    logPaymentCreateFailed(
-      "LN",
-      request.invoiceId,
-      "ln_not_implemented",
-      "LNbits integration not yet implemented"
-    );
+    // Step 3: Amount validation
+    const amountSats = parseInt(request.amountAtomic, 10);
     
-    throw new RailUnavailableError("LN", {
-      operation: "createPayment",
-      reason: "ln_not_implemented",
-      details: "LNbits invoice creation not yet implemented. Coming in Step 2.",
-      invoiceId: request.invoiceId,
-    });
+    if (isNaN(amountSats) || amountSats < this.config.minAmountSats) {
+      logPaymentCreateFailed(
+        "LN",
+        request.invoiceId,
+        "ln_amount_out_of_range",
+        `Amount ${amountSats} sats is below minimum ${this.config.minAmountSats} sats`
+      );
+      
+      throw new RailUnavailableError("LN", {
+        operation: "createPayment",
+        reason: "ln_amount_out_of_range",
+        details: `Lightning amount out of range: ${amountSats} sats is below minimum ${this.config.minAmountSats} sats`,
+        invoiceId: request.invoiceId,
+      });
+    }
+    
+    if (amountSats > this.config.maxAmountSats) {
+      logPaymentCreateFailed(
+        "LN",
+        request.invoiceId,
+        "ln_amount_out_of_range",
+        `Amount ${amountSats} sats exceeds maximum ${this.config.maxAmountSats} sats`
+      );
+      
+      throw new RailUnavailableError("LN", {
+        operation: "createPayment",
+        reason: "ln_amount_out_of_range",
+        details: `Lightning amount out of range: ${amountSats} sats exceeds maximum ${this.config.maxAmountSats} sats`,
+        invoiceId: request.invoiceId,
+      });
+    }
+
+    try {
+      // Step 3: Call LNbits to create invoice
+      const lnbitsClient = createLNbitsClient({
+        apiUrl: this.config.lnbitsApiUrl!,
+        walletKey: this.config.lnbitsWalletKey!,
+        httpTimeout: this.config.httpTimeout,
+        debugLogging: this.config.debugLogging,
+      });
+
+      const memo = request.metadata?.description as string | undefined || `Invoice ${request.invoiceId}`;
+      const webhookUrl = this.config.webhookUrl || undefined;
+
+      const lnbitsInvoice = await lnbitsClient.createInvoice(amountSats, memo, webhookUrl);
+
+      // Step 3: Calculate invoice expiry (current time + invoice expiry duration)
+      const expiresAt = new Date(Date.now() + this.config.invoiceExpiry * 1000);
+
+      // Step 3: Return unified response (stateless - no storage operations)
+      // POST /payments route will update invoice with BOLT11 and metadata
+      return {
+        paymentAddress: lnbitsInvoice.payment_request, // BOLT11 invoice for client
+        confirmationsRequired: this.confirmationsRequired,
+        expiresAt: expiresAt.toISOString(),
+        metadata: {
+          paymentHash: lnbitsInvoice.payment_hash, // For status tracking & DB
+          checkingId: lnbitsInvoice.checking_id, // For LNbits status API & DB
+          railType: "ln", // For DB update
+        },
+      };
+    } catch (error) {
+      // Log creation failure
+      const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      logPaymentCreateFailed("LN", request.invoiceId, "ln_api_error", errorMsg);
+
+      // Re-throw for caller to handle
+      throw new Error(`Failed to create Lightning invoice: ${errorMsg}`);
+    }
   }
 
   /**

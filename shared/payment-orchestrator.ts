@@ -99,6 +99,9 @@ export const CanonicalPayment = z.object({
   
   /** When the invoice expires */
   expiresAt: z.string().datetime().optional(),
+  
+  /** Rail-specific metadata (e.g., LN payment hash, derivation path) */
+  metadata: z.record(z.string(), z.unknown()).optional(),
 });
 export type CanonicalPayment = z.infer<typeof CanonicalPayment>;
 

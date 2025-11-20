@@ -1027,54 +1027,113 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      // Create invoice first (generates ID, stores with placeholder address)
-      // Note: Database uses "Lightning", API uses "LN"
+      // Create payment address via orchestrator FIRST
+      // This ensures we have all data before creating the invoice (atomic)
+      // Generate temporary ID for adapter to use
+      const tempInvoiceId = randomUUID();
+      
+      const payment = await orchestrator.createPayment(rail, {
+        invoiceId: tempInvoiceId,
+        amountAtomic: amount_atomic,
+        metadata,
+      });
+      
+      // CRITICAL: Validate and extract Lightning metadata BEFORE any DB writes
+      // Extract validated values into local constants for explicit safety
+      let lnPaymentHash: string | null = null;
+      let lnCheckingId: string | null = null;
+      let bolt11Invoice: string | null = null;
+      
+      if (rail === "LN") {
+        // Fail fast if adapter didn't return required fields
+        if (!payment.metadata?.paymentHash || !payment.metadata?.checkingId) {
+          throw new Error("Lightning adapter must return paymentHash and checkingId in metadata");
+        }
+        
+        // Extract to local constants (validated above)
+        lnPaymentHash = payment.metadata.paymentHash as string;
+        lnCheckingId = payment.metadata.checkingId as string;
+        bolt11Invoice = payment.paymentAddress;
+      }
+      
       // Compute asset from rail: LN → BTC, others map directly
       const asset = rail === "LN" ? "BTC" : rail;
       
-      const invoice = await storage.createInvoice({
+      // Create invoice with ALL data in one atomic operation
+      // All required fields extracted and validated above
+      const invoiceData: any = {
         amount: amount_atomic,
         currency: railToCurrency(rail),
         asset,
-        paymentAddress: "pending", // Placeholder, will be updated
-        description: metadata?.description || `Payment via ${rail}`,
-      });
-      
-      // Create payment address via orchestrator
-      const payment = await orchestrator.createPayment(rail, {
-        invoiceId: invoice.id,
-        amountAtomic: amount_atomic,
-      });
-      
-      // Update invoice with real payment address
-      await storage.updateInvoice(invoice.id, {
         paymentAddress: payment.paymentAddress,
+        description: metadata?.description || `Payment via ${rail}`,
         ...(payment.expiresAt && { expiresAt: new Date(payment.expiresAt) }),
-      });
+        // LN fields only present if rail === "LN" (validated above)
+        ...(bolt11Invoice && { bolt11Invoice }),
+        ...(lnPaymentHash && { lnPaymentHash }),
+        ...(lnCheckingId && { lnCheckingId }),
+      };
       
-      // Update invoice with BOLT11 for Lightning payments
-      if (rail === "LN" && payment.paymentAddress) {
-        await storage.updateInvoice(invoice.id, {
-          bolt11Invoice: payment.paymentAddress,
-        });
+      // Create invoice with complete validated data
+      let invoice;
+      try {
+        invoice = await storage.createInvoice(invoiceData);
+      } catch (storageError: any) {
+        // Log storage failure for monitoring (adapter succeeded but DB failed)
+        console.error(JSON.stringify({
+          event: "invoice.storage_failed",
+          rail,
+          amount_atomic,
+          error: storageError.message,
+          context: "Adapter succeeded, DB write failed - LNbits invoice orphaned",
+        }));
+        throw new Error(`Failed to persist invoice: ${storageError.message}`);
       }
       
       // Update payment with final invoice ID for response
       payment.invoiceId = invoice.id;
       
-      // Transform to API response format
-      const apiResponse = await canonicalToApiResponse(payment);
-      
-      // Note: monitoring.logPaymentCreated() already called by orchestrator
-      // This is additional structured logging for the HTTP layer
-      console.log(JSON.stringify({
-        event: "payment.created",
-        rail,
-        id: invoice.id,
-        amount_atomic: amount_atomic,
-      }));
-      
-      res.status(201).json(apiResponse);
+      // Transform to API response format and send response
+      // If this fails, delete the invoice (compensating transaction)
+      let apiResponse;
+      try {
+        apiResponse = await canonicalToApiResponse(payment);
+        
+        // Note: monitoring.logPaymentCreated() already called by orchestrator
+        // This is additional structured logging for the HTTP layer
+        console.log(JSON.stringify({
+          event: "payment.created",
+          rail,
+          id: invoice.id,
+          amount_atomic: amount_atomic,
+        }));
+        
+        res.status(201).json(apiResponse);
+      } catch (responseError: any) {
+        // Compensating action: mark invoice as failed
+        // Rationale: User never received BOLT11/address, can't pay, invoice is orphaned
+        console.error(JSON.stringify({
+          event: "invoice.response_failed",
+          rail,
+          invoice_id: invoice.id,
+          error: responseError.message,
+          context: "Marking orphaned invoice as failed (user never received payment address)",
+        }));
+        
+        try {
+          await storage.updateInvoiceStatus(invoice.id, "failed");
+        } catch (updateError: any) {
+          console.error(JSON.stringify({
+            event: "invoice.failed_status_update_failed",
+            rail,
+            invoice_id: invoice.id,
+            error: updateError.message,
+            context: "Failed to mark orphaned invoice as failed - manual cleanup required",
+          }));
+        }
+        
+        throw new Error(`Failed to generate response: ${responseError.message}`);
+      }
       
     } catch (error: any) {
       console.error(JSON.stringify({

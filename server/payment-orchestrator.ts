@@ -126,6 +126,7 @@ export class PaymentOrchestrator {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         ...(response.expiresAt && { expiresAt: response.expiresAt }),
+        ...(response.metadata && { metadata: response.metadata }),
       };
 
       console.log({

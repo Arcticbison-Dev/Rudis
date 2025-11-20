@@ -21,6 +21,9 @@ export const invoices = pgTable("invoices", {
   derivedAddress: text("derived_address"),
   subaddress: text("subaddress"),
   paymentSource: varchar("payment_source", { length: 20 }),
+  // Lightning Network specific fields
+  lnPaymentHash: text("ln_payment_hash"),
+  lnCheckingId: text("ln_checking_id"),
 });
 
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({
