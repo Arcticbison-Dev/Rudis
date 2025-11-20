@@ -890,6 +890,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
           result.invoice_bolt11 = inv.bolt11Invoice;
         }
         
+        // SECURITY (Step 7.4): Admin endpoints show internal LN metadata for debugging
+        // Public APIs filter these out - only admins see them
+        if (rail === "LN") {
+          if (inv.lnCheckingId) {
+            result.ln_checking_id = inv.lnCheckingId;
+          }
+          if (inv.lnPaymentHash) {
+            result.ln_payment_hash = inv.lnPaymentHash;
+          }
+        }
+        
         // Include additional useful fields
         if (inv.paidAt) {
           result.paid_at = inv.paidAt;
@@ -976,6 +987,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       if (rail === "LN" && invoice.bolt11Invoice) {
         invoiceResponse.invoice_bolt11 = invoice.bolt11Invoice;
+      }
+      
+      // SECURITY (Step 7.4): Admin endpoints show internal LN metadata for debugging
+      // Public APIs filter these out - only admins see them
+      if (rail === "LN") {
+        if (invoice.lnCheckingId) {
+          invoiceResponse.ln_checking_id = invoice.lnCheckingId;
+        }
+        if (invoice.lnPaymentHash) {
+          invoiceResponse.ln_payment_hash = invoice.lnPaymentHash;
+        }
       }
       
       // Add optional fields
