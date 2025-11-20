@@ -93,6 +93,17 @@ Altostratus Payments is a privacy-focused, self-hosted crypto payment invoice sy
 - ✅ **8.4 LN Stub Behavior**: Test procedures for LN not_implemented errors, payment.create_failed logging, /health not_implemented status with clear reason
 - ✅ **Documentation**: Comprehensive STEP8_TESTING_DRILLS.md (~900 lines) with test procedures, verification checklists, expected outputs, troubleshooting, automation templates
 
+**Lightning Network Environment Variables - Design Locked (2025-11-20):**
+- ✅ **Architecture Decision**: Direct LNbits integration (no microservice), LNbits on LND backend. App talks to LNbits API, LNbits talks to LND.
+- ✅ **Instant Settlement Design**: No LN_CONFIRMATIONS variable - Lightning invoices confirmed as soon as LNbits reports paid. No waiting period. Timing controls are poll interval (if polling), webhook delivery (if webhooks), and invoice expiry (handled by LNbits/LND).
+- ✅ **Amount Limits**: Configurable via LN_MIN_AMOUNT_SATS (default: 1) and LN_MAX_AMOUNT_SATS (default: 100000 = 0.001 BTC). Lightning-specific limits, independent of BTC/XMR validation - no regressions.
+- ✅ **Webhook Strategy (Dual-Mode Detection)**: Webhooks are optional but strongly recommended for production. **Mode 1 (Webhook + Polling)**: If LNBITS_WEBHOOK_URL configured - Primary detection via LNbits webhooks (instant, <1s), Fallback detection via light polling every LN_POLL_INTERVAL_MS (safety net catches missed webhooks), Failure escalation: webhook fails → polling catches payment (no data loss), Result: near-instant detection with 100% reliability. **Mode 2 (Polling-Only)**: If LNBITS_WEBHOOK_URL not configured - Primary detection via polling every LN_POLL_INTERVAL_MS (only method), No fallback (single point of detection), Failure escalation: polling fails → wait for next poll cycle, Result: delayed detection (up to poll interval) with higher API load. Production recommendation: Always use Mode 1 (webhooks) for best performance and reliability.
+- ✅ **Variable Naming**: LNBITS_* for API config (app uses), LND_* for backend config (LNbits uses, NOT app), LN_* for rail controls (timeouts, limits)
+- ✅ **Security**: Use Invoice/Read key (NOT Admin key), store in Replit Secrets, explicit LNBITS_WALLET_KEY and LNBITS_WEBHOOK_SECRET added to SENSITIVE_KEYS for guaranteed redaction
+- ✅ **5 Categories**: (1) Rail Controls (7 vars: ENABLE_LN, LN_BACKEND, HTTP_TIMEOUT, INVOICE_EXPIRY, MIN/MAX_AMOUNT_SATS, POLL_INTERVAL_MS), (2) LNbits API (3 vars: API_URL, WALLET_KEY, WALLET_ID), (3) LND Backend (4 vars: GRPC_HOST, TLS_CERT, MACAROON, NETWORK - app doesn't use), (4) Webhooks (3 vars: URL, SECRET, TIMEOUT), (5) Logging (2 vars: DEBUG_LOGGING, LOG_API_BODIES - must be false in prod)
+- ✅ **19 Total Variables**: 7 rail controls + 3 LNbits API + 4 LND backend + 3 webhooks + 2 logging = 19 (4 secrets: LNBITS_WALLET_KEY, LNBITS_WEBHOOK_SECRET, LND_TLS_CERT_BASE64, LND_INVOICE_MACAROON; 15 public config)
+- ✅ **Documentation**: Complete LN_ENV_VARIABLES.md with examples, troubleshooting, security checklist, 19-variable summary, architecture diagrams, instant-settlement explanation
+
 ## System Architecture
 Altostratus Payments uses a React frontend and an Express.js backend, communicating with isolated payment rail services for blockchain interactions.
 

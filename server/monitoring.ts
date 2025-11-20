@@ -250,6 +250,10 @@ const SENSITIVE_KEYS = [
   "macaroon",
   "cert",
   "certificate",
+  "LNBITS_WALLET_KEY",    // LNbits wallet key (explicit protection)
+  "LNBITS_WEBHOOK_SECRET", // LNbits webhook secret (explicit protection)
+  "wallet_key",           // Generic wallet key pattern
+  "webhook_secret",       // Generic webhook secret pattern
 ];
 
 /**
