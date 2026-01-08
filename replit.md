@@ -80,3 +80,40 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
 - Security: ✅ All measures implemented and validated
 - Error Handling: ✅ Validated and working correctly
 - Final Validation: ⏸️ Requires LNbits configuration (procedures provided)
+
+## Portable Deployment
+
+**Docker Deployment Package (Complete):**
+- `docker-compose.yml`: Full containerized deployment with health checks and service dependencies
+- `Dockerfile`: Multi-stage build for main payments service (non-root user)
+- `rail-btc/Dockerfile`: Bitcoin rail service container
+- `rail-xmr/Dockerfile`: Monero rail service container
+
+**Deployment Profiles:**
+```bash
+# Lightning only (simplest)
+docker-compose up -d
+
+# With Bitcoin rail
+docker-compose --profile btc up -d
+
+# With all rails
+docker-compose --profile btc --profile xmr up -d
+```
+
+**Documentation for Third-Party Integrators:**
+- `docs/STANDALONE_INTEGRATION_GUIDE.md`: Complete integration guide for standalone deployment
+- `docs/API_REFERENCE.md`: Full API documentation with SDK examples (JS/Python)
+- `docs/OPERATIONS_GUIDE.md`: Production operations, backup, secrets rotation, billing automation
+
+**Licensing/Service Fee Model:**
+- Percentage-based, fixed, or hybrid fee patterns documented
+- Multi-tenant configuration examples
+- Rate limiting by subscription tier
+- Monthly billing report generation
+
+**White-Label Deployment:**
+- Remove Altostratus branding from frontend
+- Configure custom domain
+- Customize webhook signature prefix
+- Template customization for emails/notifications

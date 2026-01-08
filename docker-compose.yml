@@ -31,7 +31,8 @@ services:
       - ALT_WEBHOOK_SECRET=${ALT_WEBHOOK_SECRET}
       - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL}
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     networks:
       - payments-network
     restart: unless-stopped
@@ -59,6 +60,9 @@ services:
       - BTC_CONFIRMATIONS_REQUIRED=${BTC_CONFIRMATIONS_REQUIRED:-6}
       - MEMPOOL_API_BASE=${MEMPOOL_API_BASE:-https://mempool.space/api}
       - POLLING_INTERVAL_MS=${BTC_POLLING_INTERVAL_MS:-30000}
+    depends_on:
+      payments:
+        condition: service_healthy
     networks:
       - payments-network
     restart: unless-stopped
@@ -89,6 +93,9 @@ services:
       - XMR_ACCOUNT_INDEX=${XMR_ACCOUNT_INDEX:-0}
       - XMR_CONFIRMATIONS_REQUIRED=${XMR_CONFIRMATIONS_REQUIRED:-10}
       - POLLING_INTERVAL_MS=${XMR_POLLING_INTERVAL_MS:-30000}
+    depends_on:
+      payments:
+        condition: service_healthy
     networks:
       - payments-network
     restart: unless-stopped
