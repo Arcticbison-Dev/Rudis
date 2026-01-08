@@ -397,7 +397,7 @@ async function monitorAddresses() {
               rail: "btc",
               event: "webhook.failed",
               id: invoiceId,
-              error: `HTTP ${callbackResponse.status}`,
+              error: `HTTP ${response.status}`,
               context: "payment_callback"
             }));
           }
