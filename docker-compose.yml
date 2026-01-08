@@ -1,0 +1,128 @@
+version: "3.8"
+
+services:
+  payments:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: altostratus-payments
+    ports:
+      - "${PAYMENTS_PORT:-5000}:5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - DATABASE_URL=${DATABASE_URL}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - RAIL_AUTH_TOKEN=${RAIL_AUTH_TOKEN}
+      - ADMIN_API_TOKEN=${ADMIN_API_TOKEN}
+      - ENABLE_BTC=${ENABLE_BTC:-false}
+      - ENABLE_XMR=${ENABLE_XMR:-false}
+      - ENABLE_LN=${ENABLE_LN:-false}
+      - BTC_SERVICE_URL=${BTC_SERVICE_URL:-http://rail-btc:5002}
+      - XMR_SERVICE_URL=${XMR_SERVICE_URL:-http://rail-xmr:5003}
+      - LNBITS_API_URL=${LNBITS_API_URL}
+      - LNBITS_WALLET_KEY=${LNBITS_WALLET_KEY}
+      - LNBITS_WEBHOOK_SECRET=${LNBITS_WEBHOOK_SECRET}
+      - LNBITS_WEBHOOK_URL=${LNBITS_WEBHOOK_URL}
+      - LN_MIN_AMOUNT_SATS=${LN_MIN_AMOUNT_SATS:-1}
+      - LN_MAX_AMOUNT_SATS=${LN_MAX_AMOUNT_SATS:-1000000}
+      - LN_INVOICE_EXPIRY=${LN_INVOICE_EXPIRY:-3600}
+      - ALTOSTRATUS_WEBHOOK_URL=${ALTOSTRATUS_WEBHOOK_URL}
+      - ALT_WEBHOOK_SECRET=${ALT_WEBHOOK_SECRET}
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL}
+    depends_on:
+      - postgres
+    networks:
+      - payments-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  rail-btc:
+    build:
+      context: ./rail-btc
+      dockerfile: Dockerfile
+    container_name: altostratus-rail-btc
+    ports:
+      - "${BTC_RAIL_PORT:-5002}:5002"
+    environment:
+      - NODE_ENV=production
+      - PORT=5002
+      - PAYMENTS_SERVICE_URL=http://payments:5000
+      - RAIL_AUTH_TOKEN=${RAIL_AUTH_TOKEN}
+      - BTC_XPUB=${BTC_XPUB}
+      - BTC_NETWORK=${BTC_NETWORK:-mainnet}
+      - BTC_CONFIRMATIONS_REQUIRED=${BTC_CONFIRMATIONS_REQUIRED:-6}
+      - MEMPOOL_API_BASE=${MEMPOOL_API_BASE:-https://mempool.space/api}
+      - POLLING_INTERVAL_MS=${BTC_POLLING_INTERVAL_MS:-30000}
+    networks:
+      - payments-network
+    restart: unless-stopped
+    profiles:
+      - btc
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  rail-xmr:
+    build:
+      context: ./rail-xmr
+      dockerfile: Dockerfile
+    container_name: altostratus-rail-xmr
+    ports:
+      - "${XMR_RAIL_PORT:-5003}:5003"
+    environment:
+      - NODE_ENV=production
+      - PORT=5003
+      - PAYMENTS_SERVICE_URL=http://payments:5000
+      - RAIL_AUTH_TOKEN=${RAIL_AUTH_TOKEN}
+      - XMR_RPC_HOST=${XMR_RPC_HOST:-127.0.0.1}
+      - XMR_RPC_PORT=${XMR_RPC_PORT:-18082}
+      - XMR_RPC_USERNAME=${XMR_RPC_USERNAME}
+      - XMR_RPC_PASSWORD=${XMR_RPC_PASSWORD}
+      - XMR_ACCOUNT_INDEX=${XMR_ACCOUNT_INDEX:-0}
+      - XMR_CONFIRMATIONS_REQUIRED=${XMR_CONFIRMATIONS_REQUIRED:-10}
+      - POLLING_INTERVAL_MS=${XMR_POLLING_INTERVAL_MS:-30000}
+    networks:
+      - payments-network
+    restart: unless-stopped
+    profiles:
+      - xmr
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: altostratus-postgres
+    environment:
+      - POSTGRES_USER=${PGUSER:-payments}
+      - POSTGRES_PASSWORD=${PGPASSWORD}
+      - POSTGRES_DB=${PGDATABASE:-payments}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${PGPORT:-5432}:5432"
+    networks:
+      - payments-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-payments}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  payments-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
