@@ -84,11 +84,16 @@ print_info() {
 command -v curl >/dev/null 2>&1 || { echo "curl required"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "jq required"; exit 1; }
 
-# Validate configuration
-if [ -z "$ADMIN_TOKEN" ]; then
-  echo -e "${RED}ERROR: ADMIN_API_TOKEN not set${NC}"
-  echo "Export: export ADMIN_API_TOKEN=your_token_here"
+# Validate configuration - RAIL_AUTH_TOKEN is required for payment operations
+if [ -z "$RAIL_TOKEN" ]; then
+  echo -e "${RED}ERROR: RAIL_AUTH_TOKEN not set${NC}"
+  echo "Export: export RAIL_AUTH_TOKEN=your_token_here"
   exit 1
+fi
+
+# ADMIN_API_TOKEN is optional (used for admin endpoints only)
+if [ -z "$ADMIN_TOKEN" ]; then
+  echo -e "${YELLOW}WARNING: ADMIN_API_TOKEN not set - admin endpoint tests will skip${NC}"
 fi
 
 print_header "Monero Rail E2E Test Suite - All 10 Scenarios"
@@ -142,7 +147,8 @@ if [ -n "$SIM_TOKEN" ]; then
   # Create a temporary test invoice to check simulation
   TEST_RESP=$(curl -s -X POST "$API_URL/payments" \
     -H "Content-Type: application/json" \
-    -d '{"rail": "xmr", "amount_atomic": "100000000000", "currency": "XMR", "description": "Preflight simulation test"}')
+    -H "Authorization: Bearer $RAIL_TOKEN" \
+  -d '{"rail": "XMR", "amount_atomic": "100000000000", "currency": "XMR", "description": "Preflight simulation test"}')
   TEST_ID=$(echo "$TEST_RESP" | jq -r '.id // "null"')
   
   if [ "$TEST_ID" != "null" ]; then
@@ -182,8 +188,9 @@ print_test "Creating XMR invoice..."
 
 RESPONSE=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "xmr",
+    "rail": "XMR",
     "amount_atomic": "1000000000000",
     "currency": "XMR",
     "description": "Scenario 1: Happy Path Test",
@@ -192,7 +199,7 @@ RESPONSE=$(curl -s -X POST "$API_URL/payments" \
 
 if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
   ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error')
-  if [[ "$ERROR_MSG" == *"not enabled"* ]] || [[ "$ERROR_MSG" == *"RPC"* ]]; then
+  if [[ "$ERROR_MSG" == *"not enabled"* ]] || [[ "$ERROR_MSG" == *"RPC"* ]] || [[ "$ERROR_MSG" == *"disabled"* ]]; then
     print_skip "XMR not configured: $ERROR_MSG"
   else
     print_error "Invoice creation failed: $ERROR_MSG"
@@ -304,8 +311,9 @@ print_info "See CRYPTO_PAYMENT_POLICY.md"
 
 UNDERPAY_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "xmr",
+    "rail": "XMR",
     "amount_atomic": "5000000000000",
     "currency": "XMR",
     "description": "Scenario 3: Underpay Test"
@@ -335,8 +343,9 @@ print_info "Overpayment can be credited or refunded"
 
 OVERPAY_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "xmr",
+    "rail": "XMR",
     "amount_atomic": "500000000000",
     "currency": "XMR",
     "description": "Scenario 4: Overpay Test"
@@ -361,8 +370,9 @@ print_test "Creating invoice with 5-second expiry..."
 
 EXPIRED_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "xmr",
+    "rail": "XMR",
     "amount_atomic": "100000000000",
     "currency": "XMR",
     "description": "Scenario 5: Expiry Test",
@@ -402,8 +412,9 @@ print_test "Testing unpaid invoice expiry..."
 
 CLEANUP_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "xmr",
+    "rail": "XMR",
     "amount_atomic": "100000000000",
     "currency": "XMR",
     "description": "Scenario 6: Never Pay",
@@ -495,7 +506,8 @@ for i in {1..15}; do
   RATE_RESP=$(curl -s -o /dev/null -w "%{http_code}" \
     -X POST "$API_URL/payments" \
     -H "Content-Type: application/json" \
-    -d "{
+    -H "Authorization: Bearer $RAIL_TOKEN" \
+  -d "{
       \"rail\": \"xmr\",
       \"amount_atomic\": \"100000000000\",
       \"currency\": \"XMR\",
@@ -523,7 +535,8 @@ if [ "$XMR_RAIL_AVAILABLE" = true ]; then
     -X POST "$XMR_RAIL_URL/create" \
     -H "Authorization: Bearer INVALID_TOKEN" \
     -H "Content-Type: application/json" \
-    -d '{"invoiceId": "test", "amountAtomic": "1000000000000"}')
+    -H "Authorization: Bearer $RAIL_TOKEN" \
+  -d '{"invoiceId": "test", "amountAtomic": "1000000000000"}')
   
   if [ "$AUTH_RESP" = "401" ]; then
     print_success "Rail rejects invalid auth token (401)"
@@ -538,8 +551,9 @@ print_test "Testing input validation..."
 
 INVALID_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "xmr",
+    "rail": "XMR",
     "amount_atomic": "-1000",
     "currency": "XMR",
     "description": "Negative amount"

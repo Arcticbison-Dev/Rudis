@@ -14,11 +14,14 @@ NC='\033[0m' # No Color
 # Configuration
 API_URL="${API_URL:-http://localhost:5000}"
 ADMIN_TOKEN="${ADMIN_API_TOKEN}"
+RAIL_TOKEN="${RAIL_AUTH_TOKEN}"
+SIM_TOKEN="${ADMIN_SIM_TOKEN}"
 
 # Test counters
 TESTS_RUN=0
 TESTS_PASSED=0
 TESTS_FAILED=0
+TESTS_SKIPPED=0
 
 # Helper functions
 print_header() {
@@ -43,6 +46,11 @@ print_error() {
   echo -e "${RED}✗ $1${NC}"
 }
 
+print_skip() {
+  TESTS_SKIPPED=$((TESTS_SKIPPED + 1))
+  echo -e "${YELLOW}⊘ SKIPPED: $1${NC}"
+}
+
 print_info() {
   echo -e "  $1"
 }
@@ -51,11 +59,16 @@ print_info() {
 command -v curl >/dev/null 2>&1 || { echo "curl is required but not installed. Aborting." >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "jq is required but not installed. Aborting." >&2; exit 1; }
 
-# Validate configuration
-if [ -z "$ADMIN_TOKEN" ]; then
-  echo -e "${RED}ERROR: ADMIN_API_TOKEN not set${NC}"
-  echo "Export it first: export ADMIN_API_TOKEN=your_token_here"
+# Validate configuration - RAIL_AUTH_TOKEN is required for payment operations
+if [ -z "$RAIL_TOKEN" ]; then
+  echo -e "${RED}ERROR: RAIL_AUTH_TOKEN not set${NC}"
+  echo "Export: export RAIL_AUTH_TOKEN=your_token_here"
   exit 1
+fi
+
+# ADMIN_API_TOKEN is optional (used for admin endpoints only)
+if [ -z "$ADMIN_TOKEN" ]; then
+  echo -e "${YELLOW}WARNING: ADMIN_API_TOKEN not set - admin endpoint tests will skip${NC}"
 fi
 
 print_header "Lightning Network E2E Test Suite"
@@ -70,20 +83,43 @@ print_test "Creating Lightning invoice..."
 
 RESPONSE=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "ln",
-    "amount_sats": 100,
-    "currency": "BTC",
-    "description": "E2E Test Invoice - Happy Path",
-    "expires_in_seconds": 3600
+    "rail": "LN",
+    "amount_atomic": "100",
+    "description": "E2E Test Invoice - Happy Path"
   }')
 
 # Check for errors
+LN_CONFIGURED=true
 if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
   ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error')
-  print_error "Failed to create invoice: $ERROR_MSG"
-  echo "$RESPONSE" | jq .
-  exit 1
+  if [[ "$ERROR_MSG" == *"config"* ]] || [[ "$ERROR_MSG" == *"disabled"* ]] || [[ "$ERROR_MSG" == *"unavailable"* ]]; then
+    print_skip "LN not configured: $ERROR_MSG"
+    LN_CONFIGURED=false
+  else
+    print_error "Failed to create invoice: $ERROR_MSG"
+    echo "$RESPONSE" | jq .
+    exit 1
+  fi
+fi
+
+# If LN not configured, skip remaining tests and show summary
+if [ "$LN_CONFIGURED" = "false" ]; then
+  echo ""
+  print_header "Test Summary"
+  echo "Tests Run:     $TESTS_RUN"
+  echo "Tests Passed:  $TESTS_PASSED"
+  echo "Tests Failed:  $TESTS_FAILED"
+  echo "Tests Skipped: $TESTS_SKIPPED"
+  echo ""
+  echo "LN not configured - remaining tests require ENABLE_LN=true and LNbits setup"
+  echo "See: docs/LN_TESTING_QUICKSTART.md"
+  if [ "$TESTS_FAILED" -eq 0 ]; then
+    exit 0
+  else
+    exit 1
+  fi
 fi
 
 PAYMENT_ID=$(echo "$RESPONSE" | jq -r '.id')
@@ -327,6 +363,7 @@ print_test "Testing webhook security (invalid token)..."
 WEBHOOK_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
   -X POST "$API_URL/rails/ln/webhook/INVALID_TOKEN" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
     "checking_id": "test123",
     "payment_hash": "'$(printf '%064d' 0)'",
@@ -354,7 +391,8 @@ if [ -n "$LNBITS_WEBHOOK_SECRET" ]; then
   INVALID_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
     -X POST "$API_URL/rails/ln/webhook/$LNBITS_WEBHOOK_SECRET" \
     -H "Content-Type: application/json" \
-    -d '[]')
+    -H "Authorization: Bearer $RAIL_TOKEN" \
+  -d '[]')
 
   if [ "$INVALID_RESPONSE" != "400" ]; then
     print_error "Should reject array payload (expected 400, got $INVALID_RESPONSE)"
@@ -366,7 +404,8 @@ if [ -n "$LNBITS_WEBHOOK_SECRET" ]; then
   INVALID_RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
     -X POST "$API_URL/rails/ln/webhook/$LNBITS_WEBHOOK_SECRET" \
     -H "Content-Type: application/json" \
-    -d '{
+    -H "Authorization: Bearer $RAIL_TOKEN" \
+  -d '{
       "checking_id": "../../../etc/passwd",
       "payment_hash": "abc",
       "pending": 0

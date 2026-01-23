@@ -84,11 +84,16 @@ print_info() {
 command -v curl >/dev/null 2>&1 || { echo "curl required"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "jq required"; exit 1; }
 
-# Validate configuration
-if [ -z "$ADMIN_TOKEN" ]; then
-  echo -e "${RED}ERROR: ADMIN_API_TOKEN not set${NC}"
-  echo "Export: export ADMIN_API_TOKEN=your_token_here"
+# Validate configuration - RAIL_AUTH_TOKEN is required for payment operations
+if [ -z "$RAIL_TOKEN" ]; then
+  echo -e "${RED}ERROR: RAIL_AUTH_TOKEN not set${NC}"
+  echo "Export: export RAIL_AUTH_TOKEN=your_token_here"
   exit 1
+fi
+
+# ADMIN_API_TOKEN is optional (used for admin endpoints only)
+if [ -z "$ADMIN_TOKEN" ]; then
+  echo -e "${YELLOW}WARNING: ADMIN_API_TOKEN not set - admin endpoint tests will skip${NC}"
 fi
 
 print_header "Bitcoin Rail E2E Test Suite - All 10 Scenarios"
@@ -142,7 +147,8 @@ if [ -n "$SIM_TOKEN" ]; then
   # Create a temporary test invoice to check simulation
   TEST_RESP=$(curl -s -X POST "$API_URL/payments" \
     -H "Content-Type: application/json" \
-    -d '{"rail": "btc", "amount_sats": 100, "currency": "BTC", "description": "Preflight simulation test"}')
+    -H "Authorization: Bearer $RAIL_TOKEN" \
+    -d '{"rail": "BTC", "amount_atomic": "100", "description": "Preflight simulation test"}')
   TEST_ID=$(echo "$TEST_RESP" | jq -r '.id // "null"')
   
   if [ "$TEST_ID" != "null" ]; then
@@ -182,9 +188,10 @@ print_test "Creating BTC invoice with exact amount..."
 
 RESPONSE=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "btc",
-    "amount_sats": 10000,
+    "rail": "BTC",
+    "amount_atomic": "10000",
     "currency": "BTC",
     "description": "Scenario 1: Happy Path Test",
     "expires_in_seconds": 3600
@@ -192,7 +199,7 @@ RESPONSE=$(curl -s -X POST "$API_URL/payments" \
 
 if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
   ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error')
-  if [[ "$ERROR_MSG" == *"XPUB"* ]] || [[ "$ERROR_MSG" == *"not enabled"* ]]; then
+  if [[ "$ERROR_MSG" == *"XPUB"* ]] || [[ "$ERROR_MSG" == *"not enabled"* ]] || [[ "$ERROR_MSG" == *"rail_disabled"* ]] || [[ "$ERROR_MSG" == *"disabled"* ]]; then
     print_skip "BTC not configured: $ERROR_MSG"
   else
     print_error "Invoice creation failed: $ERROR_MSG"
@@ -293,9 +300,10 @@ print_test "Creating invoice to test underpay policy..."
 
 UNDERPAY_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "btc",
-    "amount_sats": 50000,
+    "rail": "BTC",
+    "amount_atomic": "50000",
     "currency": "BTC",
     "description": "Scenario 3: Underpay Test"
   }')
@@ -313,7 +321,7 @@ if [ "$UNDERPAY_ID" != "null" ] && [ -n "$UNDERPAY_ID" ]; then
     UNDERPAY_SIM=$(curl -s -X POST "$API_URL/api/invoices/$UNDERPAY_ID/simulate-payment" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $SIM_TOKEN" \
-      -d '{"txid": "bbbb000000000000000000000000000000000000000000000000000000000002", "confirmations": 6, "amount_sats": 25000}' 2>/dev/null || echo '{"error":"not available"}')
+      -d '{"txid": "bbbb000000000000000000000000000000000000000000000000000000000002", "confirmations": 6, "amount_atomic": "25000"}' 2>/dev/null || echo '{"error":"not available"}')
     
     if echo "$UNDERPAY_SIM" | jq -e '.error' > /dev/null 2>&1; then
       if [ "$TEST_MODE" = "strict" ]; then
@@ -349,9 +357,10 @@ print_info "See CRYPTO_PAYMENT_POLICY.md for full details"
 # Create invoice for overpay test
 OVERPAY_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "btc",
-    "amount_sats": 5000,
+    "rail": "BTC",
+    "amount_atomic": "5000",
     "currency": "BTC",
     "description": "Scenario 4: Overpay Test"
   }')
@@ -369,7 +378,7 @@ if [ "$OVERPAY_ID" != "null" ]; then
     OVERPAY_SIM=$(curl -s -X POST "$API_URL/api/invoices/$OVERPAY_ID/simulate-payment" \
       -H "Content-Type: application/json" \
       -H "Authorization: Bearer $SIM_TOKEN" \
-      -d '{"txid": "cccc000000000000000000000000000000000000000000000000000000000003", "confirmations": 6, "amount_sats": 10000}' 2>/dev/null || echo '{"error":"not available"}')
+      -d '{"txid": "cccc000000000000000000000000000000000000000000000000000000000003", "confirmations": 6, "amount_atomic": "10000"}' 2>/dev/null || echo '{"error":"not available"}')
     
     if echo "$OVERPAY_SIM" | jq -e '.error' > /dev/null 2>&1; then
       if [ "$TEST_MODE" = "strict" ]; then
@@ -396,9 +405,10 @@ print_test "Creating invoice with 5-second expiry..."
 
 EXPIRED_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "btc",
-    "amount_sats": 1000,
+    "rail": "BTC",
+    "amount_atomic": "1000",
     "currency": "BTC",
     "description": "Scenario 5: Expiry Test",
     "expires_in_seconds": 5
@@ -459,9 +469,10 @@ print_test "Verifying expiry cleanup mechanism..."
 # Create invoice that will expire
 CLEANUP_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "btc",
-    "amount_sats": 1000,
+    "rail": "BTC",
+    "amount_atomic": "1000",
     "currency": "BTC",
     "description": "Scenario 6: Never Pay Test",
     "expires_in_seconds": 3
@@ -600,15 +611,20 @@ print_test "Testing input validation..."
 
 INVALID_RESP=$(curl -s -X POST "$API_URL/payments" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $RAIL_TOKEN" \
   -d '{
-    "rail": "btc",
-    "amount_sats": -1000,
-    "currency": "BTC",
+    "rail": "BTC",
+    "amount_atomic": "-1000",
     "description": "Negative amount"
   }')
 
 if echo "$INVALID_RESP" | jq -e '.error' > /dev/null 2>&1; then
-  print_success "Negative amount rejected"
+  INVALID_ERR=$(echo "$INVALID_RESP" | jq -r '.error')
+  if [[ "$INVALID_ERR" == *"disabled"* ]] || [[ "$INVALID_ERR" == *"not enabled"* ]]; then
+    print_skip "BTC not enabled - validation test requires enabled rail"
+  else
+    print_success "Negative amount rejected: $INVALID_ERR"
+  fi
 else
   print_error "Negative amount should be rejected"
 fi
