@@ -49,4 +49,4 @@ integrations = ["javascript_mem_db:1.0.0", "javascript_database:1.0.0"]
 [userenv]
 
 [userenv.shared]
-LNBITS_URL = "https://demo.lnbits.com"
+LNBITS_API_URL = "https://demo.lnbits.com"
