@@ -169,9 +169,9 @@ if echo "$DB_RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
   exit 1
 fi
 
-DB_STATUS=$(echo "$DB_RESPONSE" | jq -r '.status')
-CHECKING_ID=$(echo "$DB_RESPONSE" | jq -r '.ln_checking_id')
-PAYMENT_HASH=$(echo "$DB_RESPONSE" | jq -r '.ln_payment_hash')
+DB_STATUS=$(echo "$DB_RESPONSE" | jq -r '.invoice.status // .status')
+CHECKING_ID=$(echo "$DB_RESPONSE" | jq -r '.invoice.ln_checking_id // .ln_checking_id')
+PAYMENT_HASH=$(echo "$DB_RESPONSE" | jq -r '.invoice.ln_payment_hash // .ln_payment_hash')
 
 if [ "$DB_STATUS" != "pending" ]; then
   print_error "DB status should be 'pending', got '$DB_STATUS'"
