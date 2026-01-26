@@ -138,8 +138,8 @@ if [ "$STATUS" != "pending" ]; then
   exit 1
 fi
 
-if [ "$RAIL" != "ln" ]; then
-  print_error "Expected rail='ln', got '$RAIL'"
+if [ "$RAIL" != "LN" ]; then
+  print_error "Expected rail='LN', got '$RAIL'"
   exit 1
 fi
 
