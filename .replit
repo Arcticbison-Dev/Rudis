@@ -16,6 +16,10 @@ localPort = 5000
 externalPort = 80
 
 [[ports]]
+localPort = 5002
+externalPort = 3000
+
+[[ports]]
 localPort = 5003
 externalPort = 3003
 
@@ -51,3 +55,5 @@ integrations = ["javascript_mem_db:1.0.0", "javascript_database:1.0.0"]
 [userenv.shared]
 LNBITS_API_URL = "https://demo.lnbits.com"
 ENABLE_BTC = "true"
+BTC_NETWORK = "testnet"
+BTC_SERVICE_URL = "http://localhost:5002"

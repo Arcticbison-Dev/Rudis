@@ -72,11 +72,15 @@ export class BtcAdapter implements RailAdapter {
    */
   async createPayment(request: CreatePaymentRequest): Promise<CreatePaymentResponse> {
     try {
+      // Convert BTC amount (decimal string like "0.0001") to satoshis (integer)
+      const btcAmount = parseFloat(request.amountAtomic);
+      const amountSats = Math.round(btcAmount * 100000000); // 1 BTC = 100,000,000 satoshis
+      
       const response = await axios.post<BtcCreateResponse>(
         `${this.serviceUrl}/create`,
         {
           invoiceId: request.invoiceId,
-          amountSatoshis: request.amountAtomic,
+          amountSats: amountSats,
         },
         {
           headers: {

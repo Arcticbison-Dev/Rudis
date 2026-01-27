@@ -74,6 +74,39 @@ function getBitcoinNetwork(): bitcoin.Network {
   return BTC_NETWORK === "mainnet" ? bitcoin.networks.bitcoin : bitcoin.networks.testnet;
 }
 
+/**
+ * Get network with custom version bytes for BIP84 extended keys (zpub/vpub)
+ * zpub (mainnet) and vpub (testnet) use different version bytes than standard xpub/tpub
+ */
+function getNetworkForXpub(xpub: string): bitcoin.Network {
+  const baseNetwork = getBitcoinNetwork();
+  
+  // BIP84 zpub (mainnet native segwit): version 0x04b24746
+  if (xpub.startsWith("zpub")) {
+    return {
+      ...baseNetwork,
+      bip32: {
+        public: 0x04b24746,
+        private: 0x04b2430c,
+      },
+    };
+  }
+  
+  // BIP84 vpub (testnet native segwit): version 0x045f1cf6
+  if (xpub.startsWith("vpub")) {
+    return {
+      ...baseNetwork,
+      bip32: {
+        public: 0x045f1cf6,
+        private: 0x045f18bc,
+      },
+    };
+  }
+  
+  // Standard xpub/tpub - use default network
+  return baseNetwork;
+}
+
 // Derive BIP84 (native segwit) address from xpub
 function deriveAddress(xpub: string, index: number): { address: string; path: string } {
   if (!xpub || xpub.length === 0) {
@@ -81,7 +114,8 @@ function deriveAddress(xpub: string, index: number): { address: string; path: st
   }
 
   const network = getBitcoinNetwork();
-  const node = bip32.fromBase58(xpub, network);
+  const xpubNetwork = getNetworkForXpub(xpub);
+  const node = bip32.fromBase58(xpub, xpubNetwork);
   
   // BIP84 path: m/84'/0'/0'/0/index (external/receiving chain)
   // xpub is already at account level (m/84'/0'/0'), so we derive 0/index
@@ -552,8 +586,9 @@ function validateConfiguration(): { valid: boolean; errors: string[] } {
   } else {
     // Validate xpub format and network compatibility
     try {
-      const network = getBitcoinNetwork();
-      const node = bip32.fromBase58(BTC_XPUB, network);
+      // Use custom network for zpub/vpub formats
+      const xpubNetwork = getNetworkForXpub(BTC_XPUB);
+      const node = bip32.fromBase58(BTC_XPUB, xpubNetwork);
       
       // Additional validation: check prefix matches network
       const expectedPrefixes = BTC_NETWORK === "mainnet" 

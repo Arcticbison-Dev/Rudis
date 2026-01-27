@@ -1,7 +1,72 @@
 import express, { type Request, Response, NextFunction } from "express";
+import { spawn, ChildProcess } from "child_process";
+import path from "path";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { createLNPoller } from "./ln-poller";
+
+// Rail services child processes
+let railBtcProcess: ChildProcess | null = null;
+
+function startRailServices() {
+  // Start rail-btc if BTC is enabled
+  if (process.env.ENABLE_BTC === "true") {
+    const railBtcPath = path.resolve(process.cwd(), "rail-btc/src/index.ts");
+    
+    railBtcProcess = spawn("npx", ["tsx", railBtcPath], {
+      cwd: path.resolve(process.cwd(), "rail-btc"),
+      env: {
+        ...process.env,
+        PORT: "5002",
+        BTC_NETWORK: process.env.BTC_NETWORK || "testnet",
+        PAYMENTS_SERVICE_URL: "http://localhost:5000",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    railBtcProcess.stdout?.on("data", (data) => {
+      const lines = data.toString().split("\n").filter((l: string) => l.trim());
+      lines.forEach((line: string) => {
+        log(`[rail-btc] ${line}`);
+      });
+    });
+
+    railBtcProcess.stderr?.on("data", (data) => {
+      const lines = data.toString().split("\n").filter((l: string) => l.trim());
+      lines.forEach((line: string) => {
+        log(`[rail-btc:err] ${line}`);
+      });
+    });
+
+    railBtcProcess.on("exit", (code) => {
+      log(`[rail-btc] Process exited with code ${code}`);
+      // Restart after a delay if it crashes
+      if (code !== 0) {
+        setTimeout(() => {
+          log("[rail-btc] Restarting...");
+          startRailServices();
+        }, 5000);
+      }
+    });
+
+    log("[rail-btc] Started Bitcoin rail service on port 5002");
+  }
+}
+
+// Cleanup on shutdown
+process.on("SIGTERM", () => {
+  if (railBtcProcess) {
+    railBtcProcess.kill();
+  }
+  process.exit(0);
+});
+
+process.on("SIGINT", () => {
+  if (railBtcProcess) {
+    railBtcProcess.kill();
+  }
+  process.exit(0);
+});
 
 const app = express();
 
@@ -83,5 +148,8 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+    
+    // Start rail microservices after main server is listening
+    startRailServices();
   });
 })();

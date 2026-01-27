@@ -133,13 +133,21 @@ export class MemStorage implements IStorage {
     const id = randomUUID();
     const now = new Date();
     
+    // Derive asset from currency if not provided
+    const assetMap: Record<string, "BTC" | "XMR"> = {
+      "BTC": "BTC",
+      "Lightning": "BTC", // Lightning uses BTC as underlying asset
+      "XMR": "XMR",
+    };
+    const asset = insertInvoice.asset || assetMap[insertInvoice.currency] || "BTC";
+    
     const invoice: Invoice = {
       id,
       amount: insertInvoice.amount,
       currency: insertInvoice.currency,
-      asset: insertInvoice.asset,
+      asset: asset,
       description: insertInvoice.description,
-      paymentAddress: insertInvoice.paymentAddress,
+      paymentAddress: insertInvoice.paymentAddress || "pending", // Placeholder until rail provides address
       status: "pending",
       createdAt: now,
       updatedAt: now,
@@ -478,14 +486,22 @@ export class MemStorage implements IStorage {
 // DatabaseStorage implementation for production-ready persistence
 export class DatabaseStorage implements IStorage {
   async createInvoice(insertInvoice: InsertInvoice): Promise<Invoice> {
+    // Derive asset from currency if not provided
+    const assetMap: Record<string, "BTC" | "XMR"> = {
+      "BTC": "BTC",
+      "Lightning": "BTC", // Lightning uses BTC as underlying asset
+      "XMR": "XMR",
+    };
+    const asset = insertInvoice.asset || assetMap[insertInvoice.currency] || "BTC";
+    
     const [invoice] = await db
       .insert(invoices)
       .values({
         amount: insertInvoice.amount,
         currency: insertInvoice.currency,
-        asset: insertInvoice.asset,
+        asset: asset,
         description: insertInvoice.description,
-        paymentAddress: insertInvoice.paymentAddress,
+        paymentAddress: insertInvoice.paymentAddress || "pending", // Placeholder until rail provides address
         expiresAt: insertInvoice.expiresAt ? new Date(insertInvoice.expiresAt) : null,
         railType: (insertInvoice as any).railType || null,
         bolt11Invoice: (insertInvoice as any).bolt11Invoice || null,
