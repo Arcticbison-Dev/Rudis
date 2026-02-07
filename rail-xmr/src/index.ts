@@ -4,110 +4,99 @@ import axios from "axios";
 import { z } from "zod";
 import { XmrStorage, hashTxid } from "./storage.js";
 import { MoneroRpcClient } from "./monero-rpc.js";
+import { randomBytes, createHash } from "crypto";
 
 config();
 
-// SECURITY: Fail-fast validation BEFORE any initialization (mirrors rail-btc pattern)
+const DEV_MODE = process.env.XMR_DEV_MODE === "true";
+const XMR_NETWORK = process.env.XMR_NETWORK || "mainnet";
 const RAIL_AUTH_TOKEN = process.env.RAIL_AUTH_TOKEN || "";
 const XMR_RPC_HOST = process.env.XMR_RPC_HOST || "";
 const XMR_RPC_PORT = process.env.XMR_RPC_PORT || "";
 
 if (!RAIL_AUTH_TOKEN || RAIL_AUTH_TOKEN.length === 0) {
-  console.error("╔═══════════════════════════════════════════════════════════╗");
-  console.error("║ FATAL: RAIL_AUTH_TOKEN not set                           ║");
-  console.error("║ This service cannot run without authentication           ║");
-  console.error("║ Set RAIL_AUTH_TOKEN in environment before starting       ║");
-  console.error("╚═══════════════════════════════════════════════════════════╝");
+  console.error("FATAL: RAIL_AUTH_TOKEN not set");
   process.exit(1);
 }
 
-if (!XMR_RPC_HOST || !XMR_RPC_PORT) {
-  console.error("╔═══════════════════════════════════════════════════════════╗");
-  console.error("║ FATAL: XMR_RPC_HOST and XMR_RPC_PORT required            ║");
-  console.error("║ Monero Wallet RPC connection details must be configured  ║");
-  console.error("║ Set XMR_RPC_HOST and XMR_RPC_PORT in environment         ║");
-  console.error("╚═══════════════════════════════════════════════════════════╝");
-  process.exit(1);
+if (!DEV_MODE) {
+  if (!XMR_RPC_HOST || !XMR_RPC_PORT) {
+    console.error("FATAL: XMR_RPC_HOST and XMR_RPC_PORT required (set XMR_DEV_MODE=true for simulation)");
+    process.exit(1);
+  }
+
+  const XMR_RPC_USERNAME = process.env.XMR_RPC_USERNAME || "";
+  const XMR_RPC_PASSWORD = process.env.XMR_RPC_PASSWORD || "";
+
+  if (!XMR_RPC_USERNAME || !XMR_RPC_PASSWORD) {
+    console.error("FATAL: XMR_RPC_USERNAME and XMR_RPC_PASSWORD required");
+    process.exit(1);
+  }
+
+  if (XMR_RPC_HOST !== "127.0.0.1" && XMR_RPC_HOST !== "localhost") {
+    console.error("FATAL: Remote RPC host detected. For privacy, only localhost allowed. Use SSH tunnel for remote wallets.");
+    process.exit(1);
+  }
 }
 
-// Environment configuration (after validation)
 const PORT = parseInt(process.env.PORT || "5003", 10);
 const PAYMENTS_SERVICE_URL = process.env.PAYMENTS_SERVICE_URL || "http://localhost:5000";
-const XMR_RPC_PORT_NUM = parseInt(XMR_RPC_PORT, 10);
-const XMR_RPC_USERNAME = process.env.XMR_RPC_USERNAME || "";
-const XMR_RPC_PASSWORD = process.env.XMR_RPC_PASSWORD || "";
-
-// SECURITY: Require RPC authentication (prevent unauthenticated wallet access)
-if (!XMR_RPC_USERNAME || !XMR_RPC_PASSWORD) {
-  console.error("╔═══════════════════════════════════════════════════════════╗");
-  console.error("║ FATAL: XMR_RPC_USERNAME and XMR_RPC_PASSWORD required    ║");
-  console.error("║ Monero Wallet RPC MUST be protected with authentication  ║");
-  console.error("║ Set credentials in environment before starting           ║");
-  console.error("╚═══════════════════════════════════════════════════════════╝");
-  process.exit(1);
-}
-
-// PRIVACY: Enforce localhost RPC (prevent unencrypted remote connections)
-if (XMR_RPC_HOST !== "127.0.0.1" && XMR_RPC_HOST !== "localhost") {
-  console.error("╔═══════════════════════════════════════════════════════════╗");
-  console.error("║ FATAL: Remote RPC host detected                          ║");
-  console.error("║ For privacy, only localhost connections allowed          ║");
-  console.error("║ Use SSH tunnel for remote wallets:                       ║");
-  console.error("║   ssh -L 18082:127.0.0.1:18082 user@remote-server        ║");
-  console.error("║ Then set XMR_RPC_HOST=127.0.0.1                           ║");
-  console.error("╚═══════════════════════════════════════════════════════════╝");
-  process.exit(1);
-}
 const XMR_ACCOUNT_INDEX = parseInt(process.env.XMR_ACCOUNT_INDEX || "0", 10);
 const XMR_CONFIRMATIONS_REQUIRED = parseInt(process.env.XMR_CONFIRMATIONS_REQUIRED || "10", 10);
 const POLLING_INTERVAL_MS = parseInt(process.env.POLLING_INTERVAL_MS || "30000", 10);
 const MAX_CALLBACK_ATTEMPTS = parseInt(process.env.MAX_CALLBACK_ATTEMPTS || "5", 10);
 
-// Initialize Express app and middleware
 const app = express();
 app.use(express.json());
 
-// Initialize storage and RPC client (after validation)
 const storage = new XmrStorage();
-const moneroRpc = new MoneroRpcClient({
-  host: XMR_RPC_HOST,
-  port: XMR_RPC_PORT_NUM,
-  username: XMR_RPC_USERNAME,
-  password: XMR_RPC_PASSWORD,
-});
 
-// Zod schemas for validation
+let moneroRpc: MoneroRpcClient | null = null;
+if (!DEV_MODE) {
+  moneroRpc = new MoneroRpcClient({
+    host: XMR_RPC_HOST,
+    port: parseInt(XMR_RPC_PORT, 10),
+    username: process.env.XMR_RPC_USERNAME,
+    password: process.env.XMR_RPC_PASSWORD,
+  });
+}
+
+let devAddressCounter = 0;
+
+function generateDevSubaddress(): { address: string; address_index: number } {
+  devAddressCounter++;
+  const prefix = XMR_NETWORK === "stagenet" ? "5" : "4";
+  const hash = createHash("sha256").update(`dev-subaddr-${devAddressCounter}-${Date.now()}`).digest("hex");
+  const address = `${prefix}${hash}${hash}`.substring(0, 95);
+  return {
+    address,
+    address_index: devAddressCounter,
+  };
+}
+
 const createSubaddressSchema = z.object({
   invoiceId: z.string().uuid(),
-  amountAtomic: z.string(), // Monero amount in atomic units (piconeros, 1 XMR = 1e12)
+  amountAtomic: z.string(),
 });
 
-// Authentication middleware - Validates requests from payments service only
 function authenticatePaymentsService(req: Request, res: Response, next: NextFunction) {
-  // Fail fast if RAIL_AUTH_TOKEN is not configured
   if (!RAIL_AUTH_TOKEN || RAIL_AUTH_TOKEN.length === 0) {
-    console.error("CRITICAL: RAIL_AUTH_TOKEN not configured but /create endpoint called");
     return res.status(500).json({ error: "Server configuration error" });
   }
-  
-  const authHeader = req.headers.authorization;
 
+  const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    console.warn("Rail /create rejected: missing or invalid Authorization header");
     return res.status(401).json({ error: "Unauthorized" });
   }
 
   const token = authHeader.substring(7);
-
   if (!token || token.length === 0 || token !== RAIL_AUTH_TOKEN) {
-    console.warn("Rail /create rejected: invalid token");
     return res.status(401).json({ error: "Unauthorized" });
   }
 
   next();
 }
 
-// Callback to payments service with retry logic
 async function callbackPaymentsService(
   invoiceId: string,
   rawTxid: string,
@@ -119,7 +108,7 @@ async function callbackPaymentsService(
       `${PAYMENTS_SERVICE_URL}/api/rails/xmr/confirmed`,
       {
         invoiceId,
-        transactionId: rawTxid, // Send raw txid to payments service (they need it for their records)
+        transactionId: rawTxid,
         confirmations,
         blockHeight,
       },
@@ -134,45 +123,33 @@ async function callbackPaymentsService(
 
     if (response.status === 200) {
       console.log(JSON.stringify({
-        rail: "xmr",
-        event: "webhook.success",
-        id: invoiceId,
-        context: "payment_callback"
+        rail: "xmr", event: "webhook.success", id: invoiceId
       }));
       return true;
-    } else {
-      console.error(JSON.stringify({
-        rail: "xmr",
-        event: "webhook.failed",
-        id: invoiceId,
-        error: `HTTP ${response.status}`,
-        context: "payment_callback"
-      }));
-      return false;
     }
+    console.error(JSON.stringify({
+      rail: "xmr", event: "webhook.failed", id: invoiceId, error: `HTTP ${response.status}`
+    }));
+    return false;
   } catch (error: any) {
     console.error(JSON.stringify({
-      rail: "xmr",
-      event: "webhook.failed",
-      id: invoiceId,
-      error: error.message,
-      context: "payment_callback"
+      rail: "xmr", event: "webhook.failed", id: invoiceId, error: error.message
     }));
     return false;
   }
 }
 
-// Monitoring loop - Check for incoming payments
 async function monitorSubaddresses() {
+  if (DEV_MODE) return;
+
   try {
     const activeStates = storage.getAllActivePaymentStates();
 
     for (const state of activeStates) {
       try {
         const subaddress = storage.getSubaddress(state.invoiceId);
-        if (!subaddress) continue;
+        if (!subaddress || !moneroRpc) continue;
 
-        // Get all incoming transfers for this subaddress
         const transfers = await moneroRpc.getTransfers(
           XMR_ACCOUNT_INDEX,
           undefined,
@@ -180,77 +157,48 @@ async function monitorSubaddresses() {
         );
 
         if (!transfers.in || transfers.in.length === 0) {
-          // No payment yet, check if callback_pending needs retry
-          if (state.state === "callback_pending" && state.callbackAttempts < MAX_CALLBACK_ATTEMPTS) {
-            // Retry callback (we have txid from previous state)
-            // Note: We don't have raw txid anymore, only hash - callback will fail
-            // This is acceptable: callbacks should succeed on first attempt
-            // If they fail, manual intervention required
-            continue;
-          }
           continue;
         }
 
-        // CRITICAL: Aggregate all outputs for this invoice/subaddress
-        // Monero wallets commonly split payments into multiple outputs
-        // We need to SUM all amounts to get the true payment total
         let totalReceivedAmount = 0;
-        let minConfirmations = Infinity; // Use MINIMUM confirmations (most conservative)
+        let minConfirmations = Infinity;
         let maxBlockHeight = 0;
         let primaryTxid = "";
 
         for (const transfer of transfers.in) {
           totalReceivedAmount += transfer.amount;
-          
-          // CRITICAL: Use MINIMUM confirmations across all transfers
-          // This ensures ALL components of the payment are confirmed before settling
           if (transfer.confirmations < minConfirmations) {
             minConfirmations = transfer.confirmations;
           }
-
-          // Track the latest transaction's metadata
           if (transfer.height > maxBlockHeight || primaryTxid === "") {
             primaryTxid = transfer.txid;
             maxBlockHeight = transfer.height;
           }
         }
 
-        // Use aggregated values for validation
         const confirmations = minConfirmations === Infinity ? 0 : minConfirmations;
-        const rawTxid = primaryTxid; // Most recent txid
-        const rawAmount = totalReceivedAmount; // Total from ALL transfers
+        const rawTxid = primaryTxid;
+        const rawAmount = totalReceivedAmount;
         const blockHeight = maxBlockHeight;
-
-        // PRIVACY: Hash txid before any storage operation
         const hashedTxid = hashTxid(rawTxid);
 
-        // CRITICAL: Validate amount on EVERY poll (supports top-up payments)
         const expectedAmountStr = subaddress.expectedAmountAtomic;
         const receivedAmountStr = rawAmount.toString();
         const amountMatches = expectedAmountStr === receivedAmountStr;
 
-        // Reload state to ensure we have latest (prevents race conditions)
         let currentState = storage.getPaymentState(state.invoiceId);
         if (!currentState) continue;
 
-        // STATE MACHINE: unseen → pending → confirmed → callback_pending → settled
+        if (currentState.state === "settled") continue;
 
-        // IDEMPOTENCY GUARD: Skip if already settled
-        if (currentState.state === "settled") {
-          continue;
-        }
-
-        // Transition: unseen → pending (transaction appears)
         if (currentState.state === "unseen") {
-          // Store HASHED txid and VALIDATED amount match, NOT raw values
           storage.updatePaymentState(state.invoiceId, {
             state: "pending",
-            hashedTxid: hashedTxid,
-            amountMatch: amountMatches, // Computed on every poll
+            hashedTxid,
+            amountMatch: amountMatches,
             confirmations: confirmations.toString(),
             blockHeight: blockHeight.toString(),
           });
-
           console.log(JSON.stringify({
             rail: "xmr",
             event: amountMatches ? "payment.pending" : "payment.error",
@@ -258,44 +206,18 @@ async function monitorSubaddresses() {
             tx_hash: hashedTxid,
             ...(amountMatches ? {} : { error: "amount_mismatch" })
           }));
-
-          // Reload state after transition
           currentState = storage.getPaymentState(state.invoiceId);
           if (!currentState) continue;
         }
 
-        // Update amountMatch on EVERY poll (allows top-up payments to settle)
         if (currentState.state === "pending" || currentState.state === "confirmed") {
-          const previousAmountMatch = currentState.amountMatch;
-          
-          // Always update amountMatch to reflect current aggregate
-          storage.updatePaymentState(state.invoiceId, {
-            amountMatch: amountMatches,
-          });
-
-          // Log when amount match status changes
-          if (previousAmountMatch === false && amountMatches === true) {
-            console.log(JSON.stringify({
-              rail: "xmr",
-              event: "payment.pending",
-              id: state.invoiceId,
-              context: "amount_matched_after_topup"
-            }));
-          }
-
-          // Reload state after update
+          storage.updatePaymentState(state.invoiceId, { amountMatch: amountMatches });
           currentState = storage.getPaymentState(state.invoiceId);
           if (!currentState) continue;
         }
 
-        // CRITICAL: Block settlement if amount doesn't match
-        if (currentState.amountMatch === false) {
-          // Amount mismatch detected - stop processing this invoice
-          // Will retry on next poll (supports top-up payments)
-          continue; // Skip to next invoice until amount matches
-        }
+        if (currentState.amountMatch === false) continue;
 
-        // Update confirmations for pending/confirmed states
         if (currentState.state === "pending" || currentState.state === "confirmed") {
           storage.updatePaymentState(state.invoiceId, {
             confirmations: confirmations.toString(),
@@ -303,62 +225,35 @@ async function monitorSubaddresses() {
           });
         }
 
-        // Transition: pending → confirmed (confirmations >= threshold)
         if (currentState.state === "pending" && confirmations >= XMR_CONFIRMATIONS_REQUIRED) {
           storage.updatePaymentState(state.invoiceId, {
             state: "confirmed",
             confirmations: confirmations.toString(),
           });
-
           console.log(JSON.stringify({
-            rail: "xmr",
-            event: "payment.confirmed",
-            id: state.invoiceId,
-            tx_hash: hashedTxid,
-            confirmations: confirmations
+            rail: "xmr", event: "payment.confirmed", id: state.invoiceId,
+            tx_hash: hashedTxid, confirmations
           }));
-
-          // Reload state after transition
           currentState = storage.getPaymentState(state.invoiceId);
           if (!currentState) continue;
         }
 
-        // Transition: confirmed → callback_pending (ready for callback)
         if (currentState.state === "confirmed") {
           storage.updatePaymentState(state.invoiceId, {
             state: "callback_pending",
             confirmations: confirmations.toString(),
           });
-
-          // Reload state
           currentState = storage.getPaymentState(state.invoiceId);
           if (!currentState) continue;
         }
 
-        // Transition: callback_pending → settled (after successful callback)
         if (currentState.state === "callback_pending") {
-          // CRITICAL: Enforce MAX_CALLBACK_ATTEMPTS ceiling
-          if (currentState.callbackAttempts >= MAX_CALLBACK_ATTEMPTS) {
-            // Max retries already reached, stop attempting
-            console.error(JSON.stringify({
-              rail: "xmr",
-              event: "poll_failed",
-              id: state.invoiceId,
-              error: "callback_max_retries_exceeded",
-              context: "callback_retry_limit"
-            }));
-            continue; // Skip to next invoice, manual intervention required
-          }
+          if (currentState.callbackAttempts >= MAX_CALLBACK_ATTEMPTS) continue;
 
-          // Attempt callback
           const callbackSuccess = await callbackPaymentsService(
-            state.invoiceId,
-            rawTxid, // Send raw txid to payments service (transient, not stored)
-            confirmations,
-            blockHeight
+            state.invoiceId, rawTxid, confirmations, blockHeight
           );
 
-          // Update callback attempt tracking
           const newAttempts = currentState.callbackAttempts + 1;
           storage.updatePaymentState(state.invoiceId, {
             callbackAttempts: newAttempts,
@@ -366,70 +261,50 @@ async function monitorSubaddresses() {
           });
 
           if (callbackSuccess) {
-            // Callback succeeded, mark as settled
             storage.updatePaymentState(state.invoiceId, {
               state: "settled",
               paidAt: new Date(),
             });
-          } else if (newAttempts >= MAX_CALLBACK_ATTEMPTS) {
-            // Max retries reached, log for manual intervention
-            console.error(JSON.stringify({
-              rail: "xmr",
-              event: "poll_failed",
-              id: state.invoiceId,
-              error: "callback_max_retries",
-              context: "callback_retry_limit"
-            }));
           }
-          // If callback failed but retries remain, will retry on next poll
         }
       } catch (error: any) {
-        // Silent error - will retry on next interval
+        // Will retry on next interval
       }
     }
   } catch (error: any) {
-    // Silent error - monitoring will retry on next interval
+    // Will retry on next interval
   }
 }
 
-// Start monitoring loop
 let monitoringInterval: NodeJS.Timeout | null = null;
 
 function startMonitoring() {
-  if (monitoringInterval) {
-    clearInterval(monitoringInterval);
+  if (DEV_MODE) {
+    console.log("DEV MODE: Monitoring disabled (use POST /simulate-payment to test)");
+    return;
   }
 
-  // Initial check
-  monitorSubaddresses().catch((err: any) => {
-    // Silent error - will retry on interval
-  });
+  if (monitoringInterval) clearInterval(monitoringInterval);
 
-  // Periodic monitoring
+  monitorSubaddresses().catch(() => {});
+
   monitoringInterval = setInterval(async () => {
-    await monitorSubaddresses().catch((err: any) => {
-      // Silent error - will retry on next interval
-    });
+    await monitorSubaddresses().catch(() => {});
   }, POLLING_INTERVAL_MS);
 
   console.log(`Started Monero payment monitoring (interval: ${POLLING_INTERVAL_MS}ms, confirmations: ${XMR_CONFIRMATIONS_REQUIRED})`);
 }
 
-// Graceful shutdown
 process.on("SIGINT", () => {
-  if (monitoringInterval) {
-    clearInterval(monitoringInterval);
-  }
+  if (monitoringInterval) clearInterval(monitoringInterval);
   storage.close();
   process.exit(0);
 });
 
-// POST /create - Create new Monero subaddress for invoice
 app.post("/create", authenticatePaymentsService, async (req: Request, res: Response) => {
   try {
     const { invoiceId, amountAtomic } = createSubaddressSchema.parse(req.body);
 
-    // Idempotent: Return existing subaddress if already generated
     const existingSubaddress = storage.getSubaddress(invoiceId);
     if (existingSubaddress) {
       return res.json({
@@ -439,13 +314,20 @@ app.post("/create", authenticatePaymentsService, async (req: Request, res: Respo
       });
     }
 
-    // Create new subaddress via Monero RPC
-    const rpcResult = await moneroRpc.createAddress(
-      XMR_ACCOUNT_INDEX,
-      `Invoice:${invoiceId.substring(0, 8)}`
-    );
+    let rpcResult: { address: string; address_index: number };
 
-    // Persist to database (crash-safe, with expected amount for validation)
+    if (DEV_MODE) {
+      rpcResult = generateDevSubaddress();
+    } else {
+      if (!moneroRpc) {
+        return res.status(503).json({ error: "Monero RPC not available" });
+      }
+      rpcResult = await moneroRpc.createAddress(
+        XMR_ACCOUNT_INDEX,
+        `Invoice:${invoiceId.substring(0, 8)}`
+      );
+    }
+
     storage.createSubaddress({
       invoiceId,
       subaddress: rpcResult.address,
@@ -454,14 +336,12 @@ app.post("/create", authenticatePaymentsService, async (req: Request, res: Respo
       expectedAmountAtomic: amountAtomic,
     });
 
-    // Initialize payment state
     storage.createPaymentState(invoiceId, rpcResult.address);
 
     console.log(JSON.stringify({
-      rail: "xmr",
-      event: "payment.created",
-      id: invoiceId,
-      address: rpcResult.address
+      rail: "xmr", event: "payment.created", id: invoiceId,
+      address: rpcResult.address.substring(0, 12) + "...",
+      mode: DEV_MODE ? "dev" : "production"
     }));
 
     res.json({
@@ -473,15 +353,133 @@ app.post("/create", authenticatePaymentsService, async (req: Request, res: Respo
     if (error.name === "ZodError") {
       return res.status(400).json({ error: "Invalid request data" });
     }
-    // Silent error - operational detail not exposed
+    console.error(`XMR /create error: ${error.message}`);
     res.status(500).json({ error: "Failed to create Monero subaddress" });
   }
 });
 
-// GET /health - Health check endpoint
-app.get("/health", async (_req: Request, res: Response) => {
+const simulatePaymentSchema = z.object({
+  invoiceId: z.string().uuid(),
+  confirmations: z.number().int().min(0).optional().default(10),
+  blockHeight: z.number().int().min(0).optional().default(100000),
+});
+
+app.post("/simulate-payment", authenticatePaymentsService, async (req: Request, res: Response) => {
+  if (!DEV_MODE) {
+    return res.status(403).json({ error: "Simulation only available in dev mode" });
+  }
+
   try {
-    const isHealthy = await moneroRpc.ping();
+    const { invoiceId, confirmations, blockHeight } = simulatePaymentSchema.parse(req.body);
+
+    const subaddress = storage.getSubaddress(invoiceId);
+    if (!subaddress) {
+      return res.status(404).json({ error: "No subaddress found for this invoice" });
+    }
+
+    const currentState = storage.getPaymentState(invoiceId);
+    if (!currentState) {
+      return res.status(404).json({ error: "No payment state found" });
+    }
+
+    if (currentState.state === "settled") {
+      return res.json({ message: "Already settled", state: "settled" });
+    }
+
+    const fakeTxid = randomBytes(32).toString("hex");
+    const hashedTxid = hashTxid(fakeTxid);
+
+    storage.updatePaymentState(invoiceId, {
+      state: "confirmed",
+      hashedTxid,
+      amountMatch: true,
+      confirmations: confirmations.toString(),
+      blockHeight: blockHeight.toString(),
+    });
+
+    console.log(JSON.stringify({
+      rail: "xmr", event: "payment.simulated", id: invoiceId,
+      tx_hash: hashedTxid, confirmations
+    }));
+
+    const callbackSuccess = await callbackPaymentsService(
+      invoiceId, fakeTxid, confirmations, blockHeight
+    );
+
+    if (callbackSuccess) {
+      storage.updatePaymentState(invoiceId, {
+        state: "settled",
+        paidAt: new Date(),
+        callbackAttempts: 1,
+      });
+
+      res.json({
+        message: "Payment simulated and confirmed",
+        state: "settled",
+        txHash: hashedTxid,
+        callbackSuccess: true,
+      });
+    } else {
+      storage.updatePaymentState(invoiceId, {
+        state: "callback_pending",
+        callbackAttempts: 1,
+        lastCallbackAttempt: new Date(),
+      });
+
+      res.json({
+        message: "Payment simulated but callback failed",
+        state: "callback_pending",
+        txHash: hashedTxid,
+        callbackSuccess: false,
+      });
+    }
+  } catch (error: any) {
+    if (error.name === "ZodError") {
+      return res.status(400).json({ error: "Invalid request data" });
+    }
+    console.error(`Simulate error: ${error.message}`);
+    res.status(500).json({ error: "Simulation failed" });
+  }
+});
+
+app.get("/status/:invoiceId", authenticatePaymentsService, async (req: Request, res: Response) => {
+  try {
+    const { invoiceId } = req.params;
+    const paymentState = storage.getPaymentState(invoiceId);
+    const subaddress = storage.getSubaddress(invoiceId);
+
+    if (!paymentState || !subaddress) {
+      return res.status(404).json({ error: "Invoice not found" });
+    }
+
+    let status: "pending" | "confirmed" | "expired" = "pending";
+    if (paymentState.state === "confirmed" || paymentState.state === "callback_pending" || paymentState.state === "settled") {
+      status = "confirmed";
+    }
+
+    res.json({
+      status,
+      confirmations: parseInt(paymentState.confirmations || "0", 10),
+      amountReceivedAtomic: paymentState.amountMatch ? subaddress.expectedAmountAtomic : "0",
+      transactions: paymentState.hashedTxid ? [{
+        txidHash: paymentState.hashedTxid,
+        amountAtomic: subaddress.expectedAmountAtomic,
+        confirmations: parseInt(paymentState.confirmations || "0", 10),
+        blockHeight: paymentState.blockHeight ? parseInt(paymentState.blockHeight, 10) : undefined,
+      }] : [],
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: "Failed to get status" });
+  }
+});
+
+app.get("/health", async (_req: Request, res: Response) => {
+  if (DEV_MODE) {
+    return res.json({ ok: true, service: "rail-xmr", mode: "dev", network: XMR_NETWORK, walletRpc: "simulated" });
+  }
+
+  try {
+    const isHealthy = moneroRpc ? await moneroRpc.ping() : false;
     if (isHealthy) {
       res.json({ ok: true, service: "rail-xmr", walletRpc: "connected" });
     } else {
@@ -492,33 +490,33 @@ app.get("/health", async (_req: Request, res: Response) => {
   }
 });
 
-// Server startup
 app.listen(PORT, "0.0.0.0", async () => {
-  console.log("╔═══════════════════════════════════════════════════════════╗");
-  console.log("║       Monero Rail Service (rail-xmr) v2.0.0              ║");
-  console.log("╠═══════════════════════════════════════════════════════════╣");
-  console.log("║ Status:       ✓ OPERATIONAL                               ║");
-  console.log(`║ Port:         ${PORT.toString().padEnd(46)}║`);
-  console.log(`║ Account:      ${XMR_ACCOUNT_INDEX.toString().padEnd(46)}║`);
-  console.log(`║ Confirmations: ${XMR_CONFIRMATIONS_REQUIRED.toString().padEnd(45)}║`);
-  console.log("║ Privacy:      HASHED TXIDS (Privacy-First)                ║");
-  console.log("║ Persistence:  Database (Production-Ready)                 ║");
-  console.log("╚═══════════════════════════════════════════════════════════╝");
+  console.log("===========================================================");
+  console.log("       Monero Rail Service (rail-xmr) v2.1.0");
+  console.log("===========================================================");
+  console.log(` Mode:          ${DEV_MODE ? "DEV (Simulation)" : "PRODUCTION"}`);
+  console.log(` Network:       ${XMR_NETWORK}`);
+  console.log(` Port:          ${PORT}`);
+  console.log(` Account:       ${XMR_ACCOUNT_INDEX}`);
+  console.log(` Confirmations: ${XMR_CONFIRMATIONS_REQUIRED}`);
+  console.log(` Privacy:       HASHED TXIDS`);
+  console.log("===========================================================");
 
-  // Test Monero RPC connection
-  try {
-    const isHealthy = await moneroRpc.ping();
-    if (isHealthy) {
-      console.log("✓ Monero Wallet RPC connected successfully");
-      startMonitoring();
-    } else {
-      console.warn("⚠ Warning: Could not connect to Monero Wallet RPC");
-      console.warn("  Service running in degraded mode. /create endpoints will fail.");
-      console.warn(`  Check XMR_RPC_HOST (${XMR_RPC_HOST}) and XMR_RPC_PORT (${XMR_RPC_PORT})`);
+  if (DEV_MODE) {
+    console.log("DEV MODE active - using simulated subaddresses");
+    console.log("Use POST /simulate-payment to test payment flow");
+    startMonitoring();
+  } else {
+    try {
+      const isHealthy = moneroRpc ? await moneroRpc.ping() : false;
+      if (isHealthy) {
+        console.log("Monero Wallet RPC connected");
+        startMonitoring();
+      } else {
+        console.warn("Could not connect to Monero Wallet RPC - degraded mode");
+      }
+    } catch (error: any) {
+      console.warn(`Monero Wallet RPC error: ${error.message}`);
     }
-  } catch (error: any) {
-    console.warn("⚠ Warning: Monero Wallet RPC connection error");
-    console.warn("  Service running in degraded mode. /create endpoints will fail.");
-    console.warn(`  Error: ${error.message}`);
   }
 });

@@ -49,8 +49,8 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
 - **xmrchain.net:** Blockchain explorer for Monero transactions.
 - **Payment Rail Services:**
     - `rail-ln/`: Lightning Network listener (LND REST API integration via LNbits).
-    - `rail-btc/`: Bitcoin on-chain listener.
-    - `rail-xmr/`: Monero listener.
+    - `rail-btc/`: Bitcoin on-chain listener (auto-started as child process).
+    - `rail-xmr/`: Monero listener (auto-started as child process, supports XMR_DEV_MODE for simulation).
 
 ## Lightning Network Testing & Deployment
 

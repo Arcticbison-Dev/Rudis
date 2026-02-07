@@ -7,64 +7,73 @@ import { createLNPoller } from "./ln-poller";
 
 // Rail services child processes
 let railBtcProcess: ChildProcess | null = null;
+let railXmrProcess: ChildProcess | null = null;
+
+function spawnRailProcess(name: string, scriptPath: string, cwd: string, env: Record<string, string>): ChildProcess {
+  const proc = spawn("npx", ["tsx", scriptPath], {
+    cwd,
+    env: { ...process.env, ...env },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  proc.stdout?.on("data", (data) => {
+    const lines = data.toString().split("\n").filter((l: string) => l.trim());
+    lines.forEach((line: string) => log(`[${name}] ${line}`));
+  });
+
+  proc.stderr?.on("data", (data) => {
+    const lines = data.toString().split("\n").filter((l: string) => l.trim());
+    lines.forEach((line: string) => log(`[${name}:err] ${line}`));
+  });
+
+  return proc;
+}
 
 function startRailServices() {
-  // Start rail-btc if BTC is enabled
   if (process.env.ENABLE_BTC === "true") {
     const railBtcPath = path.resolve(process.cwd(), "rail-btc/src/index.ts");
-    
-    railBtcProcess = spawn("npx", ["tsx", railBtcPath], {
-      cwd: path.resolve(process.cwd(), "rail-btc"),
-      env: {
-        ...process.env,
-        PORT: "5002",
-        BTC_NETWORK: process.env.BTC_NETWORK || "testnet",
-        PAYMENTS_SERVICE_URL: "http://localhost:5000",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
+    railBtcProcess = spawnRailProcess("rail-btc", railBtcPath, path.resolve(process.cwd(), "rail-btc"), {
+      PORT: "5002",
+      BTC_NETWORK: process.env.BTC_NETWORK || "testnet",
+      PAYMENTS_SERVICE_URL: "http://localhost:5000",
     });
-
-    railBtcProcess.stdout?.on("data", (data) => {
-      const lines = data.toString().split("\n").filter((l: string) => l.trim());
-      lines.forEach((line: string) => {
-        log(`[rail-btc] ${line}`);
-      });
-    });
-
-    railBtcProcess.stderr?.on("data", (data) => {
-      const lines = data.toString().split("\n").filter((l: string) => l.trim());
-      lines.forEach((line: string) => {
-        log(`[rail-btc:err] ${line}`);
-      });
-    });
-
     railBtcProcess.on("exit", (code) => {
       log(`[rail-btc] Process exited with code ${code}`);
-      // Restart after a delay if it crashes
       if (code !== 0) {
-        setTimeout(() => {
-          log("[rail-btc] Restarting...");
-          startRailServices();
-        }, 5000);
+        setTimeout(() => { log("[rail-btc] Restarting..."); startRailServices(); }, 5000);
       }
     });
-
     log("[rail-btc] Started Bitcoin rail service on port 5002");
+  }
+
+  if (process.env.ENABLE_XMR === "true") {
+    const railXmrPath = path.resolve(process.cwd(), "rail-xmr/src/index.ts");
+    railXmrProcess = spawnRailProcess("rail-xmr", railXmrPath, path.resolve(process.cwd(), "rail-xmr"), {
+      PORT: "5003",
+      PAYMENTS_SERVICE_URL: "http://localhost:5000",
+      XMR_DEV_MODE: process.env.XMR_DEV_MODE || "true",
+      XMR_NETWORK: process.env.XMR_NETWORK || "stagenet",
+    });
+    railXmrProcess.on("exit", (code) => {
+      log(`[rail-xmr] Process exited with code ${code}`);
+      if (code !== 0) {
+        setTimeout(() => { log("[rail-xmr] Restarting..."); startRailServices(); }, 5000);
+      }
+    });
+    log("[rail-xmr] Started Monero rail service on port 5003");
   }
 }
 
 // Cleanup on shutdown
 process.on("SIGTERM", () => {
-  if (railBtcProcess) {
-    railBtcProcess.kill();
-  }
+  if (railBtcProcess) railBtcProcess.kill();
+  if (railXmrProcess) railXmrProcess.kill();
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
-  if (railBtcProcess) {
-    railBtcProcess.kill();
-  }
+  if (railBtcProcess) railBtcProcess.kill();
+  if (railXmrProcess) railXmrProcess.kill();
   process.exit(0);
 });
 
