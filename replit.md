@@ -24,10 +24,10 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
 - **Privacy UX:** Privacy notice on invoice creation page, hiding full payment addresses and displaying QR codes.
 
 **Technical Implementations:**
-- **In-memory storage (MemStorage):** Designed for pluggable blockchain listeners.
+- **Database Storage (DatabaseStorage):** Production-ready PostgreSQL persistence via Drizzle ORM. All invoices, payment transactions, webhook logs, templates, and BTC address derivations survive restarts. MemStorage class retained for reference but unused.
 - **Webhook System:** Features HMAC signing, persistent queue, and configurable retry logic for payment confirmations and outgoing notifications.
 - **Invoice Expiration:** Automatic checking and UI warnings, with rejection of late payments.
-- **Template Management:** Separate, persistent storage for `templates.json`.
+- **Template Management:** Database-backed template storage with full CRUD operations.
 - **Payment Transaction History:** Detailed display for paid invoices, including blockchain transaction details and explorer links.
 - **Security Enhancements:** Configurable timeouts, robust handling of expired invoices, and minimal logging for privacy.
 - **Data Retention & Privacy:** Auto-anonymization of paid invoices (>90 days) via salted hashing, configurable retention policies, and a manual anonymization endpoint.

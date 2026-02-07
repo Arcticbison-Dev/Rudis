@@ -614,7 +614,8 @@ export class DatabaseStorage implements IStorage {
     return await db
       .select()
       .from(paymentTransactions)
-      .where(eq(paymentTransactions.invoiceId, invoiceId));
+      .where(eq(paymentTransactions.invoiceId, invoiceId))
+      .orderBy(drizzleSql`${paymentTransactions.confirmedAt} DESC`);
   }
 
   async createWebhookLog(log: {
@@ -714,7 +715,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllTemplates(): Promise<Template[]> {
-    return await db.select().from(templates);
+    return await db.select().from(templates).orderBy(drizzleSql`${templates.createdAt} DESC`);
   }
 
   async updateTemplate(id: string, template: Partial<InsertTemplate>): Promise<Template | undefined> {
