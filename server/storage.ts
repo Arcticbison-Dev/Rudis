@@ -527,7 +527,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getAllInvoices(): Promise<Invoice[]> {
-    return await db.select().from(invoices);
+    return await db.select().from(invoices).orderBy(drizzleSql`${invoices.createdAt} DESC`);
   }
 
   async getPendingLightningInvoices(limit: number = 100): Promise<Invoice[]> {
@@ -676,7 +676,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(webhookLogs.status, "pending"),
-          lt(webhookLogs.retryAfter, now)
+          drizzleSql`(${webhookLogs.retryAfter} IS NULL OR ${webhookLogs.retryAfter} <= ${now})`
         )
       );
   }
@@ -821,4 +821,4 @@ export class DatabaseStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+export const storage = new DatabaseStorage();
