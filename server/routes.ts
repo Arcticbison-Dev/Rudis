@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertInvoiceSchema, insertTemplateSchema, paymentConfirmationSchema, type Invoice } from "@shared/schema";
+import { insertInvoiceSchema, insertTemplateSchema, insertFeePolicySchema, paymentConfirmationSchema, type Invoice, type FeePolicy } from "@shared/schema";
 import { paymentConfirmationSchema as legacyPaymentConfirmationSchema } from "@shared/webhook-schema";
 import axios, { AxiosError } from "axios";
 import crypto, { randomUUID } from "crypto";
@@ -233,6 +233,40 @@ function authenticateLNbitsWebhook(req: Request, res: Response, next: NextFuncti
   }
   
   next();
+}
+
+// ============================================================================
+// Fee Calculation Helpers
+// ============================================================================
+
+interface ComputedFee {
+  feeAmountAtomic: string;
+  feePercent: string;
+  feePolicyId: string;
+}
+
+function convertToAtomic(amount: string, currency: string): string {
+  const num = parseFloat(amount);
+  if (currency === "XMR") {
+    return Math.round(num * 1e12).toString();
+  }
+  return Math.round(num * 1e8).toString();
+}
+
+function computeFee(amountAtomic: string, policy: FeePolicy): ComputedFee {
+  const amount = BigInt(amountAtomic);
+  const percentFee = (amount * BigInt(Math.round(parseFloat(policy.feePercent) * 10000))) / BigInt(1000000);
+  const fixedFee = BigInt(policy.fixedFeeAtomic || "0");
+  let totalFee = percentFee + fixedFee;
+  const minFee = BigInt(policy.minFeeAtomic || "0");
+  const maxFee = policy.maxFeeAtomic ? BigInt(policy.maxFeeAtomic) : null;
+  if (totalFee < minFee) totalFee = minFee;
+  if (maxFee !== null && totalFee > maxFee) totalFee = maxFee;
+  return {
+    feeAmountAtomic: totalFee.toString(),
+    feePercent: policy.feePercent,
+    feePolicyId: policy.id,
+  };
 }
 
 // ============================================================================
@@ -1143,19 +1177,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Compute asset from rail: LN → BTC, others map directly
       const asset = rail === "LN" ? "BTC" : rail;
       
+      // Look up active fee policy for this rail/currency
+      const invoiceCurrency = railToCurrency(rail);
+      const paymentMerchantId = (metadata?.merchantId as string) || null;
+      const paymentFeePolicy = await storage.getActiveFeePolicy(invoiceCurrency, paymentMerchantId);
+      let paymentFeeData: Record<string, string | undefined> = {};
+      if (paymentFeePolicy) {
+        const fee = computeFee(amount_atomic, paymentFeePolicy);
+        paymentFeeData = {
+          merchantId: paymentMerchantId || undefined,
+          feePolicyId: fee.feePolicyId,
+          feeAmountAtomic: fee.feeAmountAtomic,
+          feePercent: fee.feePercent,
+        };
+      }
+
       // Create invoice with ALL data in one atomic operation
       // All required fields extracted and validated above
       const invoiceData: any = {
         amount: amount_atomic,
-        currency: railToCurrency(rail),
+        currency: invoiceCurrency,
         asset,
         paymentAddress: payment.paymentAddress,
         description: metadata?.description || `Payment via ${rail}`,
         ...(payment.expiresAt && { expiresAt: new Date(payment.expiresAt) }),
-        // LN fields only present if rail === "LN" (validated above)
         ...(bolt11Invoice && { bolt11Invoice }),
         ...(lnPaymentHash && { lnPaymentHash }),
         ...(lnCheckingId && { lnCheckingId }),
+        ...(paymentFeeData.feePolicyId ? paymentFeeData : {}),
       };
       
       // Create invoice with complete validated data
@@ -1425,8 +1474,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
+      // Look up active fee policy for this currency
+      const merchantId = (req.body.merchantId as string) || null;
+      const feePolicy = await storage.getActiveFeePolicy(validatedData.currency, merchantId);
+      let feeData: { merchantId?: string; feePolicyId?: string; feeAmountAtomic?: string; feePercent?: string } = {};
+      if (feePolicy) {
+        const amountAtomic = convertToAtomic(validatedData.amount, validatedData.currency);
+        const fee = computeFee(amountAtomic, feePolicy);
+        feeData = {
+          merchantId: merchantId || undefined,
+          feePolicyId: fee.feePolicyId,
+          feeAmountAtomic: fee.feeAmountAtomic,
+          feePercent: fee.feePercent,
+        };
+      }
+
       // Create invoice first (will have placeholder address)
-      const invoice = await storage.createInvoice(validatedData);
+      const invoice = await storage.createInvoice({
+        ...validatedData,
+        ...(feeData.feePolicyId ? feeData : {}),
+      } as any);
       
       // Get payment address from orchestrator
       try {
@@ -2108,6 +2175,116 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       // Silent error - endpoint returns error to client
       res.status(500).json({ error: "Failed to delete template" });
+    }
+  });
+
+  // ============================================================================
+  // Fee Policy Admin Endpoints (protected by ADMIN_API_TOKEN)
+  // ============================================================================
+
+  app.get("/admin/fee-policies", authenticateAdminApi, async (req, res) => {
+    try {
+      const policies = await storage.getAllFeePolicies();
+      res.json(policies);
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to fetch fee policies" });
+    }
+  });
+
+  app.get("/admin/fee-policies/:id", authenticateAdminApi, async (req, res) => {
+    try {
+      const policy = await storage.getFeePolicy(req.params.id);
+      if (!policy) {
+        return res.status(404).json({ error: "Fee policy not found" });
+      }
+      res.json(policy);
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to fetch fee policy" });
+    }
+  });
+
+  app.post("/admin/fee-policies", authenticateAdminApi, async (req, res) => {
+    try {
+      const validatedData = insertFeePolicySchema.parse(req.body);
+      const policy = await storage.createFeePolicy(validatedData);
+      console.log(JSON.stringify({ event: "fee_policy.created", id: policy.id, name: policy.name }));
+      res.status(201).json(policy);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ error: "Invalid fee policy data", details: error.errors });
+      }
+      res.status(500).json({ error: "Failed to create fee policy" });
+    }
+  });
+
+  app.patch("/admin/fee-policies/:id", authenticateAdminApi, async (req, res) => {
+    try {
+      const validatedData = insertFeePolicySchema.partial().parse(req.body);
+      const policy = await storage.updateFeePolicy(req.params.id, validatedData);
+      if (!policy) {
+        return res.status(404).json({ error: "Fee policy not found" });
+      }
+      console.log(JSON.stringify({ event: "fee_policy.updated", id: policy.id }));
+      res.json(policy);
+    } catch (error: any) {
+      if (error.name === "ZodError") {
+        return res.status(400).json({ error: "Invalid fee policy data", details: error.errors });
+      }
+      res.status(500).json({ error: "Failed to update fee policy" });
+    }
+  });
+
+  app.delete("/admin/fee-policies/:id", authenticateAdminApi, async (req, res) => {
+    try {
+      const deleted = await storage.deleteFeePolicy(req.params.id);
+      if (!deleted) {
+        return res.status(404).json({ error: "Fee policy not found" });
+      }
+      console.log(JSON.stringify({ event: "fee_policy.deleted", id: req.params.id }));
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to delete fee policy" });
+    }
+  });
+
+  // Fee summary report - aggregate fees collected within a date range
+  app.get("/admin/fee-report", authenticateAdminApi, async (req, res) => {
+    try {
+      const from = req.query.from ? new Date(req.query.from as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const to = req.query.to ? new Date(req.query.to as string) : new Date();
+
+      const allInvoices = await storage.getAllInvoices();
+      const feeInvoices = allInvoices.filter(inv => {
+        if (!inv.feeAmountAtomic || inv.feeAmountAtomic === "0") return false;
+        if (inv.status !== "confirmed") return false;
+        const created = new Date(inv.createdAt);
+        return created >= from && created <= to;
+      });
+
+      const summary: Record<string, { count: number; totalFeeAtomic: bigint; currency: string }> = {};
+      for (const inv of feeInvoices) {
+        const key = inv.currency;
+        if (!summary[key]) {
+          summary[key] = { count: 0, totalFeeAtomic: BigInt(0), currency: key };
+        }
+        summary[key].count += 1;
+        summary[key].totalFeeAtomic += BigInt(inv.feeAmountAtomic!);
+      }
+
+      const report = Object.values(summary).map(s => ({
+        currency: s.currency,
+        invoiceCount: s.count,
+        totalFeeAtomic: s.totalFeeAtomic.toString(),
+      }));
+
+      res.json({
+        from: from.toISOString(),
+        to: to.toISOString(),
+        currencies: report,
+        totalInvoicesWithFees: feeInvoices.length,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to generate fee report" });
     }
   });
 

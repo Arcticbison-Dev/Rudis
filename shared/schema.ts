@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, decimal, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, decimal, timestamp, index, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -24,6 +24,11 @@ export const invoices = pgTable("invoices", {
   // Lightning Network specific fields
   lnPaymentHash: text("ln_payment_hash"),
   lnCheckingId: text("ln_checking_id"),
+  // Service fee fields
+  merchantId: varchar("merchant_id", { length: 100 }),
+  feePolicyId: varchar("fee_policy_id"),
+  feeAmountAtomic: varchar("fee_amount_atomic", { length: 30 }),
+  feePercent: decimal("fee_percent", { precision: 8, scale: 4 }),
 }, (table) => ({
   // Index for efficient Lightning Network invoice lookups
   lnCheckingIdIdx: index("ln_checking_id_idx").on(table.lnCheckingId),
@@ -152,3 +157,36 @@ export type InsertBtcPaymentState = {
   blockHeight?: number;
   amountSats?: number;
 };
+
+// Fee policies - configurable service fee for licensing/SaaS model
+export const feePolicies = pgTable("fee_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name", { length: 100 }).notNull(),
+  merchantId: varchar("merchant_id", { length: 100 }),
+  feePercent: decimal("fee_percent", { precision: 8, scale: 4 }).notNull().default("0"),
+  fixedFeeAtomic: varchar("fixed_fee_atomic", { length: 30 }).notNull().default("0"),
+  minFeeAtomic: varchar("min_fee_atomic", { length: 30 }).notNull().default("0"),
+  maxFeeAtomic: varchar("max_fee_atomic", { length: 30 }),
+  currency: varchar("currency", { length: 10 }).notNull().default("BTC"),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const insertFeePolicySchema = createInsertSchema(feePolicies).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+}).extend({
+  name: z.string().min(1, "Policy name is required"),
+  feePercent: z.string().regex(/^\d+(\.\d{1,4})?$/, "Invalid fee percent").optional(),
+  fixedFeeAtomic: z.string().regex(/^\d+$/, "Must be a positive integer string").optional(),
+  minFeeAtomic: z.string().regex(/^\d+$/, "Must be a positive integer string").optional(),
+  maxFeeAtomic: z.string().regex(/^\d+$/, "Must be a positive integer string").optional().nullable(),
+  currency: z.enum(["BTC", "XMR", "Lightning"]).optional(),
+  active: z.boolean().optional(),
+  merchantId: z.string().max(100).optional().nullable(),
+});
+
+export type InsertFeePolicy = z.infer<typeof insertFeePolicySchema>;
+export type FeePolicy = typeof feePolicies.$inferSelect;

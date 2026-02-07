@@ -9,12 +9,15 @@ import {
   type InsertBtcAddressDerivation,
   type BtcPaymentState,
   type InsertBtcPaymentState,
+  type FeePolicy,
+  type InsertFeePolicy,
   invoices,
   webhookLogs,
   paymentTransactions,
   templates,
   btcAddressDerivations,
   btcPaymentStates,
+  feePolicies,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { readFile, writeFile } from "fs/promises";
@@ -83,6 +86,14 @@ export interface IStorage {
   getBtcPaymentState(invoiceId: string): Promise<BtcPaymentState | undefined>;
   updateBtcPaymentState(invoiceId: string, updates: Partial<BtcPaymentState>): Promise<BtcPaymentState | undefined>;
   getAllActiveBtcPaymentStates(): Promise<BtcPaymentState[]>;
+  
+  // Fee policy operations (service fee / licensing model)
+  createFeePolicy(policy: InsertFeePolicy): Promise<FeePolicy>;
+  getFeePolicy(id: string): Promise<FeePolicy | undefined>;
+  getActiveFeePolicy(currency: string, merchantId?: string | null): Promise<FeePolicy | undefined>;
+  getAllFeePolicies(): Promise<FeePolicy[]>;
+  updateFeePolicy(id: string, updates: Partial<InsertFeePolicy>): Promise<FeePolicy | undefined>;
+  deleteFeePolicy(id: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
@@ -161,6 +172,10 @@ export class MemStorage implements IStorage {
       paymentSource: (insertInvoice as any).paymentSource || null,
       lnPaymentHash: (insertInvoice as any).lnPaymentHash || null,
       lnCheckingId: (insertInvoice as any).lnCheckingId || null,
+      merchantId: (insertInvoice as any).merchantId || null,
+      feePolicyId: (insertInvoice as any).feePolicyId || null,
+      feeAmountAtomic: (insertInvoice as any).feeAmountAtomic || null,
+      feePercent: (insertInvoice as any).feePercent || null,
     };
     
     this.invoices.set(id, invoice);
@@ -481,6 +496,30 @@ export class MemStorage implements IStorage {
   async getAllActiveBtcPaymentStates(): Promise<BtcPaymentState[]> {
     throw new Error("Bitcoin operations require DatabaseStorage. Use DatabaseStorage for production.");
   }
+
+  async createFeePolicy(policy: InsertFeePolicy): Promise<FeePolicy> {
+    throw new Error("Fee policy operations require DatabaseStorage.");
+  }
+
+  async getFeePolicy(id: string): Promise<FeePolicy | undefined> {
+    throw new Error("Fee policy operations require DatabaseStorage.");
+  }
+
+  async getActiveFeePolicy(currency: string, merchantId?: string | null): Promise<FeePolicy | undefined> {
+    throw new Error("Fee policy operations require DatabaseStorage.");
+  }
+
+  async getAllFeePolicies(): Promise<FeePolicy[]> {
+    throw new Error("Fee policy operations require DatabaseStorage.");
+  }
+
+  async updateFeePolicy(id: string, updates: Partial<InsertFeePolicy>): Promise<FeePolicy | undefined> {
+    throw new Error("Fee policy operations require DatabaseStorage.");
+  }
+
+  async deleteFeePolicy(id: string): Promise<boolean> {
+    throw new Error("Fee policy operations require DatabaseStorage.");
+  }
 }
 
 // DatabaseStorage implementation for production-ready persistence
@@ -510,6 +549,10 @@ export class DatabaseStorage implements IStorage {
         paymentSource: (insertInvoice as any).paymentSource || null,
         lnPaymentHash: (insertInvoice as any).lnPaymentHash || null,
         lnCheckingId: (insertInvoice as any).lnCheckingId || null,
+        merchantId: (insertInvoice as any).merchantId || null,
+        feePolicyId: (insertInvoice as any).feePolicyId || null,
+        feeAmountAtomic: (insertInvoice as any).feeAmountAtomic || null,
+        feePercent: (insertInvoice as any).feePercent || null,
         status: "pending",
       })
       .returning();
@@ -819,6 +862,68 @@ export class DatabaseStorage implements IStorage {
       .where(
         drizzleSql`${btcPaymentStates.state} != 'settled'`
       );
+  }
+
+  // Fee policy operations
+  async createFeePolicy(policy: InsertFeePolicy): Promise<FeePolicy> {
+    const [created] = await db
+      .insert(feePolicies)
+      .values({
+        name: policy.name,
+        merchantId: policy.merchantId || null,
+        feePercent: policy.feePercent || "0",
+        fixedFeeAtomic: policy.fixedFeeAtomic || "0",
+        minFeeAtomic: policy.minFeeAtomic || "0",
+        maxFeeAtomic: policy.maxFeeAtomic || null,
+        currency: policy.currency || "BTC",
+        active: policy.active !== undefined ? policy.active : true,
+      })
+      .returning();
+    return created;
+  }
+
+  async getFeePolicy(id: string): Promise<FeePolicy | undefined> {
+    const [policy] = await db.select().from(feePolicies).where(eq(feePolicies.id, id));
+    return policy || undefined;
+  }
+
+  async getActiveFeePolicy(currency: string, merchantId?: string | null): Promise<FeePolicy | undefined> {
+    if (merchantId) {
+      const [policy] = await db.select().from(feePolicies).where(
+        and(
+          eq(feePolicies.currency, currency),
+          eq(feePolicies.merchantId, merchantId),
+          eq(feePolicies.active, true)
+        )
+      );
+      if (policy) return policy;
+    }
+    const [defaultPolicy] = await db.select().from(feePolicies).where(
+      and(
+        eq(feePolicies.currency, currency),
+        drizzleSql`${feePolicies.merchantId} IS NULL`,
+        eq(feePolicies.active, true)
+      )
+    );
+    return defaultPolicy || undefined;
+  }
+
+  async getAllFeePolicies(): Promise<FeePolicy[]> {
+    return await db.select().from(feePolicies).orderBy(drizzleSql`${feePolicies.createdAt} DESC`);
+  }
+
+  async updateFeePolicy(id: string, updates: Partial<InsertFeePolicy>): Promise<FeePolicy | undefined> {
+    const [updated] = await db
+      .update(feePolicies)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(eq(feePolicies.id, id))
+      .returning();
+    return updated || undefined;
+  }
+
+  async deleteFeePolicy(id: string): Promise<boolean> {
+    const result = await db.delete(feePolicies).where(eq(feePolicies.id, id)).returning();
+    return result.length > 0;
   }
 }
 
