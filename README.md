@@ -39,9 +39,10 @@ Copy `.env.example` to `.env` and configure:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `ADMIN_API_TOKEN` | Yes | Protects admin API endpoints |
+| `ADMIN_API_TOKEN` | Yes | Protects admin API endpoints and admin UI |
 | `RAIL_AUTH_TOKEN` | Yes | Authenticates rail service callbacks |
 | `SESSION_SECRET` | Yes | Express session signing key |
+| `INVOICE_API_KEY` | No | When set, requires Bearer auth on invoice creation |
 | `ENABLE_LN` | No | Enable Lightning Network payments |
 | `ENABLE_BTC` | No | Enable Bitcoin on-chain payments |
 | `ENABLE_XMR` | No | Enable Monero payments |
@@ -78,7 +79,7 @@ PostgreSQL (Drizzle ORM)
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/api/invoices` | GET | None | List invoices |
-| `/api/invoices` | POST | Rate-limited | Create invoice |
+| `/api/invoices` | POST | Rate-limited + optional INVOICE_API_KEY | Create invoice |
 | `/api/invoices/:id` | GET | None | Get invoice detail |
 | `/api/templates` | CRUD | None | Manage invoice templates |
 | `/payments` | POST | RAIL_AUTH_TOKEN | Create payment (rail-agnostic) |
@@ -103,9 +104,9 @@ npx vitest run       # Terminal 2
 npx vitest
 ```
 
-The test suite (50 tests) covers:
+The test suite (54 tests) covers:
 - **Fee computation** (18 unit tests): percentage, fixed, min/max caps, BigInt precision, XMR piconero scale
-- **Invoice lifecycle** (10 integration tests): create, read, validate, fee attachment
+- **Invoice lifecycle** (14 integration tests): create, read, validate, fee attachment, API key auth
 - **Admin endpoints** (13 tests): fee policy CRUD, auth validation, invoice listing, fee reports
 - **Templates and health** (9 tests): template CRUD, health/metrics endpoints
 

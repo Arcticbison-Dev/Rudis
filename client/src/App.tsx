@@ -10,8 +10,9 @@ import CreateInvoice from "@/pages/create-invoice";
 import InvoiceDetail from "@/pages/invoice-detail";
 import Templates from "@/pages/templates";
 import ApiDocs from "@/pages/api-docs";
+import Admin from "@/pages/admin";
 import NotFound from "@/pages/not-found";
-import { FileText, BookOpen, Plus, Layers } from "lucide-react";
+import { FileText, BookOpen, Plus, Layers, Shield } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 
@@ -22,6 +23,7 @@ function Router() {
       <Route path="/create" component={CreateInvoice} />
       <Route path="/invoice/:id" component={InvoiceDetail} />
       <Route path="/templates" component={Templates} />
+      <Route path="/admin" component={Admin} />
       <Route path="/api-docs" component={ApiDocs} />
       <Route component={NotFound} />
     </Switch>
@@ -35,6 +37,7 @@ function Header() {
     { path: "/", label: "Dashboard", icon: FileText },
     { path: "/create", label: "Create Invoice", icon: Plus },
     { path: "/templates", label: "Templates", icon: Layers },
+    { path: "/admin", label: "Admin", icon: Shield },
     { path: "/api-docs", label: "API Docs", icon: BookOpen },
   ];
 

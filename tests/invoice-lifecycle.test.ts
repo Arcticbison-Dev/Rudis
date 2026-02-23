@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { api, randomDescription } from "./helpers";
 
+const INVOICE_API_KEY = process.env.INVOICE_API_KEY || "";
+
 const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 describe("Invoice Lifecycle", () => {
@@ -119,6 +121,66 @@ describe("Invoice Lifecycle", () => {
     it("returns 404 for non-existent invoice", async () => {
       const { status } = await api("/api/invoices/00000000-0000-0000-0000-000000000000");
       expect(status).toBe(404);
+    });
+  });
+
+  describe("INVOICE_API_KEY auth enforcement", () => {
+    it("returns 401 when INVOICE_API_KEY is set and no auth header provided", async () => {
+      if (!INVOICE_API_KEY) {
+        console.log("Skipping: INVOICE_API_KEY not set");
+        return;
+      }
+      const { status, body } = await api("/api/invoices", {
+        method: "POST",
+        body: {
+          amount: "0.001",
+          currency: "BTC",
+          description: randomDescription(),
+        },
+      });
+      expect(status).toBe(401);
+      expect(body.error).toBe("Unauthorized");
+    });
+
+    it("returns 401 when INVOICE_API_KEY is set and wrong key provided", async () => {
+      if (!INVOICE_API_KEY) {
+        console.log("Skipping: INVOICE_API_KEY not set");
+        return;
+      }
+      const { status, body } = await api("/api/invoices", {
+        method: "POST",
+        headers: { Authorization: "Bearer wrong-key-value" },
+        body: {
+          amount: "0.001",
+          currency: "BTC",
+          description: randomDescription(),
+        },
+      });
+      expect(status).toBe(401);
+      expect(body.error).toBe("Unauthorized");
+    });
+
+    it("succeeds when INVOICE_API_KEY is set and correct key provided", async () => {
+      if (!INVOICE_API_KEY) {
+        console.log("Skipping: INVOICE_API_KEY not set");
+        return;
+      }
+      const { status, body } = await api("/api/invoices", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${INVOICE_API_KEY}` },
+        body: {
+          amount: "0.001",
+          currency: "BTC",
+          description: randomDescription(),
+        },
+      });
+      expect(status).toBe(201);
+      expect(body.id).toBeDefined();
+    });
+
+    it("allows GET /api/invoices without auth even when INVOICE_API_KEY is set", async () => {
+      const { status } = await api("/api/invoices");
+      expect(status).toBe(200);
     });
   });
 

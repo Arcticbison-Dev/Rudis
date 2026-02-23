@@ -30,14 +30,22 @@ services:
       - ALTOSTRATUS_WEBHOOK_URL=${ALTOSTRATUS_WEBHOOK_URL}
       - ALT_WEBHOOK_SECRET=${ALT_WEBHOOK_SECRET}
       - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL}
+      - SIMULATION_ENABLED=false
+      - ADMIN_SIM_TOKEN=
+      - INVOICE_API_KEY=${INVOICE_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - payments-network
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -68,8 +76,13 @@ services:
     restart: unless-stopped
     profiles:
       - btc
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5002/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5002/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -101,8 +114,13 @@ services:
     restart: unless-stopped
     profiles:
       - xmr
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5003/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5003/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -121,6 +139,8 @@ services:
     networks:
       - payments-network
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PGUSER:-payments}"]
       interval: 10s

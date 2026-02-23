@@ -19,7 +19,7 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
 - **Frontend Framework:** React SPA with Wouter for routing.
 - **Design System:** Tailwind CSS + Shadcn UI, following `design_guidelines.md` (Inter font, Blue primary color, consistent spacing).
 - **Interactions:** Fast, responsive, with subtle animations and real-time updates.
-- **Features:** Dashboard, invoice creation, invoice detail with QR codes, template management, and API documentation.
+- **Features:** Dashboard, invoice creation, invoice detail with QR codes, template management, admin fee policy management, and API documentation.
 - **Theming:** Light/dark mode support.
 - **Privacy UX:** Privacy notice on invoice creation page, hiding full payment addresses and displaying QR codes.
 
@@ -30,7 +30,7 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
 - **Invoice Expiration:** Automatic checking and UI warnings, with rejection of late payments.
 - **Template Management:** Database-backed template storage with full CRUD operations.
 - **Payment Transaction History:** Detailed display for paid invoices, including blockchain transaction details and explorer links.
-- **Security Enhancements:** Configurable timeouts, robust handling of expired invoices, and minimal logging for privacy.
+- **Security Enhancements:** Configurable timeouts, robust handling of expired invoices, minimal logging for privacy. Optional `INVOICE_API_KEY` for Bearer-token auth on invoice creation (when set, POST /api/invoices requires `Authorization: Bearer <key>`; GET endpoints remain public).
 - **Data Retention & Privacy:** Auto-anonymization of paid invoices (>90 days) via salted hashing, configurable retention policies, and a manual anonymization endpoint.
 - **Lightning Network Integration:** Dual-path payment detection via webhooks and polling fallback, shared confirmation logic, production-ready persistence, database indexing for efficient lookups, paginated queries, and idempotency. Instant settlement design with configurable amount limits. Full integration with health, alert, and admin systems. Security hardening with secret protection, input validation, and response filtering. Comprehensive end-to-end testing documentation (Steps 1-8 complete).
 - **Multi-Rail Monitoring:** Enhanced structured logging with log levels, tracking of payment lifecycle events and infrastructure events. Sensitive data protection through comprehensive filtering and stack trace sanitization. Per-rail health state tracking with automatic updates (including LN), exposed via `/health` and `/metrics` endpoints. Configurable alert conditions with deduplication and recovery tracking, supporting optional external webhook notifications.
@@ -41,10 +41,10 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
 **System Design Choices:**
 - **Payment Rail Services:** Isolated services (`rail-ln`, `rail-btc`, `rail-xmr`) handle blockchain interactions, communicating with the main payments service via authenticated callbacks.
 - **Data Schema:** Defined in `shared/schema.ts` for Invoice, WebhookLog, PaymentTransaction, Template, BtcAddressDerivation, BtcPaymentState, and FeePolicy models, with privacy considerations.
-- **API Endpoints:** Comprehensive REST API for invoices, templates, webhook callbacks, and development-only payment simulation. Admin endpoints are protected by `ADMIN_API_TOKEN`.
+- **API Endpoints:** Comprehensive REST API for invoices, templates, webhook callbacks, and development-only payment simulation. Admin endpoints are protected by `ADMIN_API_TOKEN`. Invoice creation optionally protected by `INVOICE_API_KEY`.
 - **Configuration:** Extensive use of environment variables for timeouts, retry attempts, feature flags (ENABLE_LN, ENABLE_BTC, ENABLE_XMR), service URLs, and security tokens. Full template in `.env.example`.
 - **Observability:** Centralized event logging, alert detection with configurable thresholds, optional webhook notifications for critical alerts, and a `GET /metrics` endpoint.
-- **Security:** Strict access control, separation of multiple API tokens (`ADMIN_API_TOKEN`, `RAIL_AUTH_TOKEN`, etc.), data minimization, and automated log sanitization.
+- **Security:** Strict access control, separation of multiple API tokens (`ADMIN_API_TOKEN`, `RAIL_AUTH_TOKEN`, `INVOICE_API_KEY`), data minimization, and automated log sanitization.
 
 ## Project Structure
 ```
@@ -86,7 +86,7 @@ docs/archive/       - Historical development documentation
 - **Run tests:** `npx vitest run` (requires running server on port 5000)
 - **Test categories:**
   - `fee-computation.test.ts` - Unit tests for fee calculation (18 tests)
-  - `invoice-lifecycle.test.ts` - Invoice CRUD and fee attachment (10 tests)
+  - `invoice-lifecycle.test.ts` - Invoice CRUD, fee attachment, API key auth (14 tests)
   - `admin-fee-policy.test.ts` - Admin auth and fee policy CRUD (13 tests)
   - `templates-health.test.ts` - Template CRUD, health, metrics (9 tests)
 - **Note:** Invoice creation tests include waits due to rate limiting (10 req/min)

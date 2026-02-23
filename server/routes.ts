@@ -55,6 +55,9 @@ const ENABLE_XMR = process.env.ENABLE_XMR === "true";
 // Admin API configuration (Step 5.3: Security for admin endpoints)
 const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || "";
 
+// Optional API key for invoice creation
+const INVOICE_API_KEY = process.env.INVOICE_API_KEY || "";
+
 // Simulation configuration  
 const SIMULATION_ENABLED = process.env.SIMULATION_ENABLED === "true";
 const ADMIN_SIM_TOKEN = process.env.ADMIN_SIM_TOKEN || "";
@@ -185,6 +188,29 @@ function authenticateAdminApi(req: Request, res: Response, next: NextFunction) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   
+  next();
+}
+
+// Optional API key authentication for invoice creation
+// When INVOICE_API_KEY is set, POST /api/invoices requires Authorization: Bearer <key>
+// When not set, the endpoint remains public (rate-limited only)
+function authenticateInvoiceApiKey(req: Request, res: Response, next: NextFunction) {
+  if (!INVOICE_API_KEY || INVOICE_API_KEY.length === 0) {
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const token = authHeader.substring(7);
+
+  if (!token || token.length === 0 || token !== INVOICE_API_KEY) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   next();
 }
 
@@ -1419,7 +1445,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create new invoice (using unified payment orchestrator)
-  app.post("/api/invoices", createInvoiceLimiter, async (req, res) => {
+  app.post("/api/invoices", createInvoiceLimiter, authenticateInvoiceApiKey, async (req, res) => {
     try {
       const validatedData = insertInvoiceSchema.parse(req.body);
       
