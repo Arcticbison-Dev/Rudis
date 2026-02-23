@@ -25,6 +25,7 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
 
 **Technical Implementations:**
 - **Database Storage (DatabaseStorage):** Production-ready PostgreSQL persistence via Drizzle ORM. All invoices, payment transactions, webhook logs, templates, and BTC address derivations survive restarts. MemStorage class retained for reference but unused.
+- **Database Migrations:** Drizzle Kit migrations in `migrations/` directory. Generate with `npx drizzle-kit generate`, apply with `npx drizzle-kit push`.
 - **Webhook System:** Features HMAC signing, persistent queue, and configurable retry logic for payment confirmations and outgoing notifications.
 - **Invoice Expiration:** Automatic checking and UI warnings, with rejection of late payments.
 - **Template Management:** Database-backed template storage with full CRUD operations.
@@ -34,15 +35,42 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
 - **Lightning Network Integration:** Dual-path payment detection via webhooks and polling fallback, shared confirmation logic, production-ready persistence, database indexing for efficient lookups, paginated queries, and idempotency. Instant settlement design with configurable amount limits. Full integration with health, alert, and admin systems. Security hardening with secret protection, input validation, and response filtering. Comprehensive end-to-end testing documentation (Steps 1-8 complete).
 - **Multi-Rail Monitoring:** Enhanced structured logging with log levels, tracking of payment lifecycle events and infrastructure events. Sensitive data protection through comprehensive filtering and stack trace sanitization. Per-rail health state tracking with automatic updates (including LN), exposed via `/health` and `/metrics` endpoints. Configurable alert conditions with deduplication and recovery tracking, supporting optional external webhook notifications.
 - **Admin/Ops View:** Admin endpoints (`/admin/invoices`, `/admin/invoices/:id`) for viewing invoices with filtering (rail=ln supported), pagination, and detailed transaction information. Includes BOLT11 invoices, payment timestamps, amounts, and debug information for payment tracking and worker status. Protected by ADMIN_API_TOKEN.
-- **Service Fee / Licensing Model:** Database-backed fee policies with configurable percentage fees, fixed fees, min/max caps, and per-currency settings. Fees are automatically computed and stored on each invoice at creation time. Admin endpoints for fee policy CRUD (`/admin/fee-policies`) and aggregate fee reporting (`/admin/fee-report`). Supports multi-tenant configurations via optional merchantId. All fee endpoints protected by ADMIN_API_TOKEN.
+- **Service Fee / Licensing Model:** Database-backed fee policies with configurable percentage fees, fixed fees, min/max caps, and per-currency settings. Fees are automatically computed and stored on each invoice at creation time. Admin endpoints for fee policy CRUD (`/admin/fee-policies`) and aggregate fee reporting (`/admin/fee-report`). Supports multi-tenant configurations via optional merchantId. All fee endpoints protected by ADMIN_API_TOKEN. Fee computation extracted to `server/fee-utils.ts` for testability.
+- **Automated Test Suite:** Vitest-based test suite in `tests/` directory covering fee computation (unit), invoice lifecycle (integration), admin endpoints (auth + CRUD), templates, and health/metrics. Run with `npx vitest run`. Config in `vitest.config.ts`.
 
 **System Design Choices:**
 - **Payment Rail Services:** Isolated services (`rail-ln`, `rail-btc`, `rail-xmr`) handle blockchain interactions, communicating with the main payments service via authenticated callbacks.
-- **Data Schema:** Defined in `shared/schema.ts` for Invoice, WebhookLog, PaymentTransaction, and Template models, with privacy considerations.
+- **Data Schema:** Defined in `shared/schema.ts` for Invoice, WebhookLog, PaymentTransaction, Template, BtcAddressDerivation, BtcPaymentState, and FeePolicy models, with privacy considerations.
 - **API Endpoints:** Comprehensive REST API for invoices, templates, webhook callbacks, and development-only payment simulation. Admin endpoints are protected by `ADMIN_API_TOKEN`.
-- **Configuration:** Extensive use of environment variables for timeouts, retry attempts, feature flags (ENABLE_LN, ENABLE_BTC, ENABLE_XMR), service URLs, and security tokens.
+- **Configuration:** Extensive use of environment variables for timeouts, retry attempts, feature flags (ENABLE_LN, ENABLE_BTC, ENABLE_XMR), service URLs, and security tokens. Full template in `.env.example`.
 - **Observability:** Centralized event logging, alert detection with configurable thresholds, optional webhook notifications for critical alerts, and a `GET /metrics` endpoint.
 - **Security:** Strict access control, separation of multiple API tokens (`ADMIN_API_TOKEN`, `RAIL_AUTH_TOKEN`, etc.), data minimization, and automated log sanitization.
+
+## Project Structure
+```
+server/
+  index.ts          - Express server entry point
+  routes.ts         - All API route handlers
+  storage.ts        - IStorage interface + DatabaseStorage implementation
+  fee-utils.ts      - Fee computation functions (extracted for testability)
+  monitoring.ts     - Health, metrics, alerting
+  payment-orchestrator.ts - Multi-rail payment orchestration
+  lnbitsClient.ts   - LNbits API client
+  ln-*.ts           - Lightning Network specific modules
+  db.ts             - Database connection
+shared/
+  schema.ts         - Drizzle ORM schema (7 tables)
+  payment-orchestrator.ts - Shared payment types
+  webhook-schema.ts - Webhook payload schemas
+client/src/         - React SPA frontend
+rail-btc/           - Bitcoin on-chain rail service
+rail-ln/            - Lightning Network rail service
+rail-xmr/           - Monero rail service
+tests/              - Vitest automated test suite
+migrations/         - Drizzle Kit database migrations
+docs/               - API reference, operations guide, integration guide
+docs/archive/       - Historical development documentation
+```
 
 ## External Dependencies
 - **QRCode.react:** For generating QR codes.
@@ -53,68 +81,29 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
     - `rail-btc/`: Bitcoin on-chain listener (auto-started as child process).
     - `rail-xmr/`: Monero listener (auto-started as child process, supports XMR_DEV_MODE for simulation).
 
-## Lightning Network Testing & Deployment
-
-**Step 8 Documentation (Complete):**
-- Comprehensive end-to-end testing procedures: `STEP8_LN_E2E_TESTING.md`
-- Automated test suite: `test-ln-e2e.sh`
-- Quick start guide: `LN_TESTING_QUICKSTART.md`
-- Test execution report: `STEP8_TEST_EXECUTION_REPORT.md`
-- Security validation: `STEP7_LN_SECURITY_PRIVACY.md`
-
-**Testing Status:**
-- ✅ **Error Handling Validated**: System properly handles missing LNbits configuration
-- ✅ **Security Validated**: Webhook authentication, input validation, response filtering
-- ✅ **System Resilience Validated**: No crashes, graceful degradation, clear error messages
-- ⏸️ **Happy Path Testing**: Requires live LNbits instance (complete procedures documented)
-
-**To Complete End-to-End Testing:**
-1. Set up LNbits instance (self-hosted or cloud: https://legend.lnbits.com)
-2. Configure environment variables (see `LN_TESTING_QUICKSTART.md`)
-3. Run automated test suite: `./test-ln-e2e.sh`
-4. Follow manual test procedures in `STEP8_LN_E2E_TESTING.md`
-
-**Production Deployment Readiness:**
-- Architecture: ✅ Complete and production-ready
-- Documentation: ✅ Comprehensive testing guides and procedures
-- Automation: ✅ Test suite ready for validation
-- Security: ✅ All measures implemented and validated
-- Error Handling: ✅ Validated and working correctly
-- Final Validation: ⏸️ Requires LNbits configuration (procedures provided)
+## Testing
+- **Test framework:** Vitest with test files in `tests/` directory
+- **Run tests:** `npx vitest run` (requires running server on port 5000)
+- **Test categories:**
+  - `fee-computation.test.ts` - Unit tests for fee calculation (18 tests)
+  - `invoice-lifecycle.test.ts` - Invoice CRUD and fee attachment (10 tests)
+  - `admin-fee-policy.test.ts` - Admin auth and fee policy CRUD (13 tests)
+  - `templates-health.test.ts` - Template CRUD, health, metrics (9 tests)
+- **Note:** Invoice creation tests include waits due to rate limiting (10 req/min)
 
 ## Portable Deployment
 
-**Docker Deployment Package (Complete):**
+**Docker Deployment Package:**
 - `docker-compose.yml`: Full containerized deployment with health checks and service dependencies
 - `Dockerfile`: Multi-stage build for main payments service (non-root user)
 - `rail-btc/Dockerfile`: Bitcoin rail service container
 - `rail-xmr/Dockerfile`: Monero rail service container
+- `setup.sh`: Automated setup script (generates secrets, installs deps, pushes schema)
 
-**Deployment Profiles:**
-```bash
-# Lightning only (simplest)
-docker-compose up -d
-
-# With Bitcoin rail
-docker-compose --profile btc up -d
-
-# With all rails
-docker-compose --profile btc --profile xmr up -d
-```
-
-**Documentation for Third-Party Integrators:**
-- `docs/STANDALONE_INTEGRATION_GUIDE.md`: Complete integration guide for standalone deployment
+**Documentation:**
+- `README.md`: Quick start and architecture overview
 - `docs/API_REFERENCE.md`: Full API documentation with SDK examples (JS/Python)
-- `docs/OPERATIONS_GUIDE.md`: Production operations, backup, secrets rotation, billing automation
-
-**Licensing/Service Fee Model:**
-- Percentage-based, fixed, or hybrid fee patterns documented
-- Multi-tenant configuration examples
-- Rate limiting by subscription tier
-- Monthly billing report generation
-
-**White-Label Deployment:**
-- Remove Altostratus branding from frontend
-- Configure custom domain
-- Customize webhook signature prefix
-- Template customization for emails/notifications
+- `docs/OPERATIONS_GUIDE.md`: Production operations, backup, secrets rotation
+- `docs/STANDALONE_INTEGRATION_GUIDE.md`: Third-party deployment guide
+- `docs/OBSERVABILITY.md`: Monitoring, alerting, health checks
+- `docs/archive/`: Historical development docs (security audits, step summaries, etc.)
