@@ -86,6 +86,9 @@ PostgreSQL (Drizzle ORM)
 | `/admin/invoices` | GET | ADMIN_API_TOKEN | List all invoices (admin) |
 | `/admin/fee-policies` | CRUD | ADMIN_API_TOKEN | Manage fee policies |
 | `/admin/fee-report` | GET | ADMIN_API_TOKEN | Aggregate fee reporting |
+| `/admin/fee-settlements` | GET | ADMIN_API_TOKEN | List fee settlements |
+| `/admin/fee-settlements/:id/mark-paid` | POST | ADMIN_API_TOKEN | Mark settlement as paid |
+| `/api/fee-status` | GET | None | Fee collection status |
 | `/health` | GET | None | System health check |
 | `/metrics` | GET | None | Monitoring metrics |
 
@@ -104,11 +107,12 @@ npx vitest run       # Terminal 2
 npx vitest
 ```
 
-The test suite (54 tests) covers:
+The test suite (62 tests) covers:
 - **Fee computation** (18 unit tests): percentage, fixed, min/max caps, BigInt precision, XMR piconero scale
 - **Invoice lifecycle** (14 integration tests): create, read, validate, fee attachment, API key auth
 - **Admin endpoints** (13 tests): fee policy CRUD, auth validation, invoice listing, fee reports
 - **Templates and health** (9 tests): template CRUD, health/metrics endpoints
+- **Fee collection** (8 tests): fee status endpoint, settlement auth, mark-paid, forwarding status
 
 Note: Invoice creation tests include rate-limit waits (10 req/min limit on the endpoint).
 
@@ -146,6 +150,8 @@ All admin endpoints require the `ADMIN_API_TOKEN` via `Authorization: Bearer <to
 - `GET/POST /admin/fee-policies` - List and create fee policies
 - `PATCH/DELETE /admin/fee-policies/:id` - Update and delete fee policies
 - `GET /admin/fee-report` - Aggregate fee reporting with date range
+- `GET /admin/fee-settlements` - List fee settlements (pending/paid/overdue)
+- `POST /admin/fee-settlements/:id/mark-paid` - Mark settlement as paid
 
 ### Database Migrations
 
@@ -192,6 +198,36 @@ curl -X POST http://localhost:5000/admin/fee-policies \
 
 # View fee report
 curl http://localhost:5000/admin/fee-report \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"
+```
+
+## Automatic Fee Collection
+
+The system supports automatic operator fee collection with two paths:
+
+**Lightning Network (instant):** After payment confirmation, fees are auto-forwarded to the operator's Lightning Address via LNbits outbound payments. Requires `OPERATOR_LN_ADDRESS` and `LNBITS_ADMIN_KEY`.
+
+**BTC/XMR (accumulated settlement):** Fees accumulate per-invoice. When the total exceeds `FEE_SETTLEMENT_THRESHOLD_SATS` (default: 10,000 sats), a settlement record is created with the operator's address and a grace period (`FEE_SETTLEMENT_GRACE_DAYS`, default: 30 days). Overdue settlements block new invoice creation (HTTP 402).
+
+| Variable | Description |
+|----------|-------------|
+| `OPERATOR_LN_ADDRESS` | Lightning Address for instant forwarding (e.g. `operator@getalby.com`) |
+| `LNBITS_ADMIN_KEY` | LNbits Admin Key for outbound payments |
+| `OPERATOR_BTC_ADDRESS` | BTC address for on-chain fee settlements |
+| `OPERATOR_XMR_ADDRESS` | XMR address for Monero fee settlements |
+| `FEE_SETTLEMENT_THRESHOLD_SATS` | Min accumulated fees before settlement (default: 10000) |
+| `FEE_SETTLEMENT_GRACE_DAYS` | Days before settlement is overdue (default: 30) |
+
+```bash
+# Check fee collection status
+curl http://localhost:5000/api/fee-status
+
+# List settlements (admin)
+curl http://localhost:5000/admin/fee-settlements \
+  -H "Authorization: Bearer $ADMIN_API_TOKEN"
+
+# Mark settlement as paid (admin)
+curl -X POST http://localhost:5000/admin/fee-settlements/<id>/mark-paid \
   -H "Authorization: Bearer $ADMIN_API_TOKEN"
 ```
 

@@ -47,6 +47,7 @@ export interface LNbitsPayment {
 export interface LNbitsClientConfig {
   apiUrl: string; // Base URL (e.g., https://legend.lnbits.com)
   walletKey: string; // Invoice/Read API key
+  adminKey?: string; // Admin API key (required for outbound payments)
   httpTimeout: number; // Request timeout in ms
   debugLogging?: boolean; // Enable method/URL/status logging (never logs bodies/secrets)
 }
@@ -57,8 +58,14 @@ export interface LNbitsClientConfig {
  * Provides typed methods for interacting with LNbits API endpoints.
  * All errors are logged securely without exposing API keys or sensitive data.
  */
+export interface LNbitsPayInvoiceResponse {
+  payment_hash: string;
+  checking_id: string;
+}
+
 export class LNbitsClient {
   private readonly client: AxiosInstance;
+  private readonly adminClient?: AxiosInstance;
   private readonly config: LNbitsClientConfig;
 
   constructor(config: LNbitsClientConfig) {
@@ -92,10 +99,20 @@ export class LNbitsClient {
           return response;
         },
         (error) => {
-          // Don't log error here - handleError will do it securely
           return Promise.reject(error);
         }
       );
+    }
+
+    if (config.adminKey) {
+      this.adminClient = axios.create({
+        baseURL: config.apiUrl,
+        timeout: config.httpTimeout,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Api-Key": config.adminKey,
+        },
+      });
     }
   }
 
@@ -148,6 +165,28 @@ export class LNbitsClient {
       return response.data;
     } catch (error) {
       this.handleError(error, "getPaymentStatus", { paymentHash });
+      throw error;
+    }
+  }
+
+  get canMakeOutboundPayments(): boolean {
+    return !!this.adminClient;
+  }
+
+  async payInvoice(bolt11: string): Promise<LNbitsPayInvoiceResponse> {
+    if (!this.adminClient) {
+      throw new Error("LNbits Admin Key is required for outbound payments");
+    }
+
+    try {
+      const response = await this.adminClient.post<LNbitsPayInvoiceResponse>("/api/v1/payments", {
+        out: true,
+        bolt11,
+      });
+
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "payInvoice", {});
       throw error;
     }
   }

@@ -36,11 +36,12 @@ Altostratus Payments utilizes a React frontend and an Express.js backend, commun
 - **Multi-Rail Monitoring:** Enhanced structured logging with log levels, tracking of payment lifecycle events and infrastructure events. Sensitive data protection through comprehensive filtering and stack trace sanitization. Per-rail health state tracking with automatic updates (including LN), exposed via `/health` and `/metrics` endpoints. Configurable alert conditions with deduplication and recovery tracking, supporting optional external webhook notifications.
 - **Admin/Ops View:** Admin endpoints (`/admin/invoices`, `/admin/invoices/:id`) for viewing invoices with filtering (rail=ln supported), pagination, and detailed transaction information. Includes BOLT11 invoices, payment timestamps, amounts, and debug information for payment tracking and worker status. Protected by ADMIN_API_TOKEN.
 - **Service Fee / Licensing Model:** Database-backed fee policies with configurable percentage fees, fixed fees, min/max caps, and per-currency settings. Fees are automatically computed and stored on each invoice at creation time. Admin endpoints for fee policy CRUD (`/admin/fee-policies`) and aggregate fee reporting (`/admin/fee-report`). Supports multi-tenant configurations via optional merchantId. All fee endpoints protected by ADMIN_API_TOKEN. Fee computation extracted to `server/fee-utils.ts` for testability.
+- **Automatic Fee Collection:** Operator revenue model with two collection paths: (1) Lightning Network instant forwarding — after payment confirmation, fees are auto-forwarded to the operator's Lightning Address via LNbits outbound payments; (2) BTC/XMR accumulated settlement — fees accumulate until a threshold is reached, then a settlement record is created with the operator's address and a grace period for payment. Overdue settlements block new invoice creation (402 Payment Required). Admin UI shows collection status, settlement history, and mark-as-paid controls. Config: `OPERATOR_LN_ADDRESS`, `LNBITS_ADMIN_KEY`, `OPERATOR_BTC_ADDRESS`, `OPERATOR_XMR_ADDRESS`, `FEE_SETTLEMENT_THRESHOLD_SATS`, `FEE_SETTLEMENT_GRACE_DAYS`.
 - **Automated Test Suite:** Vitest-based test suite in `tests/` directory covering fee computation (unit), invoice lifecycle (integration), admin endpoints (auth + CRUD), templates, and health/metrics. Run with `npx vitest run`. Config in `vitest.config.ts`.
 
 **System Design Choices:**
 - **Payment Rail Services:** Isolated services (`rail-ln`, `rail-btc`, `rail-xmr`) handle blockchain interactions, communicating with the main payments service via authenticated callbacks.
-- **Data Schema:** Defined in `shared/schema.ts` for Invoice, WebhookLog, PaymentTransaction, Template, BtcAddressDerivation, BtcPaymentState, and FeePolicy models, with privacy considerations.
+- **Data Schema:** Defined in `shared/schema.ts` for Invoice, WebhookLog, PaymentTransaction, Template, BtcAddressDerivation, BtcPaymentState, FeePolicy, and FeeSettlement models, with privacy considerations.
 - **API Endpoints:** Comprehensive REST API for invoices, templates, webhook callbacks, and development-only payment simulation. Admin endpoints are protected by `ADMIN_API_TOKEN`. Invoice creation optionally protected by `INVOICE_API_KEY`.
 - **Configuration:** Extensive use of environment variables for timeouts, retry attempts, feature flags (ENABLE_LN, ENABLE_BTC, ENABLE_XMR), service URLs, and security tokens. Full template in `.env.example`.
 - **Observability:** Centralized event logging, alert detection with configurable thresholds, optional webhook notifications for critical alerts, and a `GET /metrics` endpoint.
@@ -53,6 +54,7 @@ server/
   routes.ts         - All API route handlers
   storage.ts        - IStorage interface + DatabaseStorage implementation
   fee-utils.ts      - Fee computation functions (extracted for testability)
+  fee-forwarding.ts - Automatic fee collection (LN forwarding, BTC/XMR settlement)
   monitoring.ts     - Health, metrics, alerting
   payment-orchestrator.ts - Multi-rail payment orchestration
   lnbitsClient.ts   - LNbits API client
@@ -89,6 +91,7 @@ docs/archive/       - Historical development documentation
   - `invoice-lifecycle.test.ts` - Invoice CRUD, fee attachment, API key auth (14 tests)
   - `admin-fee-policy.test.ts` - Admin auth and fee policy CRUD (13 tests)
   - `templates-health.test.ts` - Template CRUD, health, metrics (9 tests)
+  - `fee-collection.test.ts` - Fee status, settlement auth, mark-paid, forwarding (8 tests)
 - **Note:** Invoice creation tests include waits due to rate limiting (10 req/min)
 
 ## Portable Deployment

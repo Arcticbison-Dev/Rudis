@@ -140,6 +140,50 @@ export default function ApiDocs() {
         message: "15 expired invoice(s) purged",
       },
     },
+    {
+      method: "GET",
+      path: "/api/fee-status",
+      title: "Fee Collection Status",
+      description: "Check whether automatic fee collection is enabled and whether the system is in good standing. Returns whether invoice creation is blocked due to overdue settlements.",
+      response: {
+        feeCollectionEnabled: true,
+        systemInGoodStanding: true,
+        invoiceCreationBlocked: false,
+      },
+    },
+    {
+      method: "GET",
+      path: "/admin/fee-settlements",
+      title: "List Fee Settlements",
+      description: "List all fee settlements with status filtering. Requires ADMIN_API_TOKEN. Settlements are auto-created when accumulated fees exceed the threshold.",
+      response: [
+        {
+          id: "settle-001",
+          currency: "BTC",
+          totalFeeAtomic: "15000",
+          invoiceCount: 12,
+          status: "pending",
+          operatorAddress: "bc1q...",
+          dueAt: "2026-03-25T00:00:00Z",
+          createdAt: "2026-02-23T12:00:00Z",
+          paidAt: null,
+        },
+      ],
+    },
+    {
+      method: "POST",
+      path: "/admin/fee-settlements/:id/mark-paid",
+      title: "Mark Settlement as Paid",
+      description: "Mark a pending or overdue settlement as paid. Requires ADMIN_API_TOKEN. Clears the overdue enforcement block on invoice creation.",
+      response: {
+        success: true,
+        settlement: {
+          id: "settle-001",
+          status: "paid",
+          paidAt: "2026-02-25T10:00:00Z",
+        },
+      },
+    },
   ];
 
   return (

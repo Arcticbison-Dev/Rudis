@@ -11,6 +11,8 @@ import { PaymentCurrency, type CanonicalPayment } from "@shared/payment-orchestr
 import { z } from "zod";
 import * as monitoring from "./monitoring";
 import { confirmLightningPayment } from "./ln-payment-handler";
+import { forwardLnFee, markFeeAccumulated, checkAndCreateSettlements, checkOverdueSettlements, getOperatorConfig, retryPendingLnForwards } from "./fee-forwarding";
+import { createLNbitsClient, type LNbitsClient } from "./lnbitsClient";
 
 // Privacy helpers - truncate addresses and txids for logging
 function truncateAddress(address: string | null | undefined): string {
@@ -61,6 +63,38 @@ const INVOICE_API_KEY = process.env.INVOICE_API_KEY || "";
 // Simulation configuration  
 const SIMULATION_ENABLED = process.env.SIMULATION_ENABLED === "true";
 const ADMIN_SIM_TOKEN = process.env.ADMIN_SIM_TOKEN || "";
+
+let feeForwardingLnClient: LNbitsClient | null = null;
+if (process.env.LNBITS_API_URL && process.env.LNBITS_WALLET_KEY && process.env.LNBITS_ADMIN_KEY) {
+  feeForwardingLnClient = createLNbitsClient({
+    apiUrl: process.env.LNBITS_API_URL,
+    walletKey: process.env.LNBITS_WALLET_KEY,
+    adminKey: process.env.LNBITS_ADMIN_KEY,
+    httpTimeout: parseInt(process.env.LN_HTTP_TIMEOUT || "5000", 10),
+  });
+}
+
+async function handleFeeForwarding(invoice: any, rail: string): Promise<void> {
+  const feeAtomic = invoice.feeAmountAtomic;
+  if (!feeAtomic || BigInt(feeAtomic) <= 0n) return;
+
+  try {
+    if (rail === "LN" && feeForwardingLnClient) {
+      const feeSats = parseInt(feeAtomic, 10);
+      await forwardLnFee(invoice.id, feeSats, feeForwardingLnClient);
+    } else {
+      await markFeeAccumulated(invoice.id);
+    }
+  } catch (error: any) {
+    console.error(JSON.stringify({
+      event: "fee.forwarding.error",
+      invoiceId: invoice.id,
+      rail,
+      error: error.message,
+    }));
+    await markFeeAccumulated(invoice.id);
+  }
+}
 
 // Rate limiters
 const createInvoiceLimiter = rateLimit({
@@ -660,6 +694,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Periodic cleanup of old failed webhooks (every hour)
   setInterval(async () => {
     await cleanupOldWebhooks();
+  }, 60 * 60 * 1000);
+
+  // Periodic fee settlement check (every hour)
+  setInterval(async () => {
+    try {
+      await checkAndCreateSettlements();
+      if (feeForwardingLnClient) {
+        await retryPendingLnForwards(feeForwardingLnClient);
+      }
+    } catch (e) {}
   }, 60 * 60 * 1000);
 
   // Periodic data retention and privacy cleanup (every 24 hours)
@@ -1447,9 +1491,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create new invoice (using unified payment orchestrator)
   app.post("/api/invoices", createInvoiceLimiter, authenticateInvoiceApiKey, async (req, res) => {
     try {
+      const hasOverdueFees = await checkOverdueSettlements();
+      if (hasOverdueFees) {
+        return res.status(402).json({
+          error: "fees_overdue",
+          message: "Invoice creation is blocked: outstanding fee settlements must be paid before creating new invoices. Contact the system operator.",
+        });
+      }
+
       const validatedData = insertInvoiceSchema.parse(req.body);
       
-      // Map currency names to orchestrator format
       const currencyMap: Record<string, "BTC" | "XMR" | "LN"> = {
         "BTC": "BTC",
         "XMR": "XMR",
@@ -1723,7 +1774,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateInvoiceStatus(invoiceId, "confirmed", new Date());
       
-      // Log payment confirmation with transaction details
       console.log(JSON.stringify({ 
         rail: "ln", 
         event: "payment.confirmed", 
@@ -1732,8 +1782,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         confirmations: confirmations 
       }));
       
-      // Log to monitoring system
       monitoring.logPaymentStatus("LN", invoiceId, "confirmed");
+
+      await handleFeeForwarding(invoice, "LN");
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       if (altWebhookUrl) {
@@ -1752,7 +1803,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true });
     } catch (error: any) {
-      // Silent error - endpoint returns error to rail service
       res.status(500).json({ error: "Lightning settlement processing failed" });
     }
   });
@@ -1789,7 +1839,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateInvoiceStatus(invoiceId, "confirmed", new Date());
       
-      // Log payment confirmation with transaction details
       console.log(JSON.stringify({ 
         rail: "btc", 
         event: "payment.confirmed", 
@@ -1799,8 +1848,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         block_height: blockHeight
       }));
       
-      // Log to monitoring system
       monitoring.logPaymentStatus("BTC", invoiceId, "confirmed");
+
+      await handleFeeForwarding(invoice, "BTC");
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       if (altWebhookUrl) {
@@ -1819,7 +1869,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true });
     } catch (error: any) {
-      // Silent error - endpoint returns error to rail service
       res.status(500).json({ error: "Bitcoin confirmation processing failed" });
     }
   });
@@ -1856,7 +1905,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await storage.updateInvoiceStatus(invoiceId, "confirmed", new Date());
       
-      // Log payment confirmation with transaction details
       console.log(JSON.stringify({ 
         rail: "xmr", 
         event: "payment.confirmed", 
@@ -1866,8 +1914,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         block_height: blockHeight
       }));
       
-      // Log to monitoring system
       monitoring.logPaymentStatus("XMR", invoiceId, "confirmed");
+
+      await handleFeeForwarding(invoice, "XMR");
       
       const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
       if (altWebhookUrl) {
@@ -1886,7 +1935,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json({ success: true });
     } catch (error: any) {
-      // Silent error - endpoint returns error to rail service
       res.status(500).json({ error: "Monero confirmation processing failed" });
     }
   });
@@ -2283,6 +2331,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
     } catch (error: any) {
       res.status(500).json({ error: "Failed to generate fee report" });
+    }
+  });
+
+  // Fee settlement management endpoints
+  app.get("/admin/fee-settlements", authenticateAdminApi, async (req, res) => {
+    try {
+      const settlements = await storage.getAllFeeSettlements();
+      res.json(settlements);
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to fetch fee settlements" });
+    }
+  });
+
+  app.post("/admin/fee-settlements/:id/mark-paid", authenticateAdminApi, async (req, res) => {
+    try {
+      const settlement = await storage.getFeeSettlement(req.params.id);
+      if (!settlement) {
+        return res.status(404).json({ error: "Settlement not found" });
+      }
+      if (settlement.status === "paid") {
+        return res.json({ message: "Settlement already marked as paid", settlement });
+      }
+      const updated = await storage.updateFeeSettlementStatus(req.params.id, "paid", new Date());
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to update settlement" });
+    }
+  });
+
+  app.post("/admin/fee-settlements/check", authenticateAdminApi, async (req, res) => {
+    try {
+      await checkAndCreateSettlements();
+      const settlements = await storage.getAllFeeSettlements();
+      res.json({ message: "Settlement check completed", settlements });
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to check settlements" });
+    }
+  });
+
+  app.get("/api/fee-status", async (req, res) => {
+    try {
+      const hasOverdue = await checkOverdueSettlements();
+      const config = getOperatorConfig();
+      res.json({
+        feeCollectionEnabled: config.feeCollectionEnabled,
+        systemInGoodStanding: !hasOverdue,
+        invoiceCreationBlocked: hasOverdue,
+      });
+    } catch (error: any) {
+      res.json({ feeCollectionEnabled: false, systemInGoodStanding: true, invoiceCreationBlocked: false });
     }
   });
 

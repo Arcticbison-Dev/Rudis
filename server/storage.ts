@@ -11,6 +11,8 @@ import {
   type InsertBtcPaymentState,
   type FeePolicy,
   type InsertFeePolicy,
+  type FeeSettlement,
+  type InsertFeeSettlement,
   invoices,
   webhookLogs,
   paymentTransactions,
@@ -18,6 +20,7 @@ import {
   btcAddressDerivations,
   btcPaymentStates,
   feePolicies,
+  feeSettlements,
 } from "@shared/schema";
 import { randomUUID } from "crypto";
 import { readFile, writeFile } from "fs/promises";
@@ -94,6 +97,15 @@ export interface IStorage {
   getAllFeePolicies(): Promise<FeePolicy[]>;
   updateFeePolicy(id: string, updates: Partial<InsertFeePolicy>): Promise<FeePolicy | undefined>;
   deleteFeePolicy(id: string): Promise<boolean>;
+
+  // Fee settlement operations (automatic fee collection)
+  createFeeSettlement(settlement: InsertFeeSettlement): Promise<FeeSettlement>;
+  getFeeSettlement(id: string): Promise<FeeSettlement | undefined>;
+  getAllFeeSettlements(): Promise<FeeSettlement[]>;
+  updateFeeSettlementStatus(id: string, status: string, paidAt?: Date): Promise<FeeSettlement | undefined>;
+  getAccumulatedFees(currency: string, merchantId?: string | null): Promise<{ total: string; count: number }>;
+  getInvoicesWithUnforwardedFees(currency: string, limit?: number): Promise<Invoice[]>;
+  getOverdueSettlements(graceDays: number): Promise<FeeSettlement[]>;
 }
 
 export class MemStorage implements IStorage {
@@ -520,6 +532,34 @@ export class MemStorage implements IStorage {
   async deleteFeePolicy(id: string): Promise<boolean> {
     throw new Error("Fee policy operations require DatabaseStorage.");
   }
+
+  async createFeeSettlement(settlement: InsertFeeSettlement): Promise<FeeSettlement> {
+    throw new Error("Fee settlement operations require DatabaseStorage.");
+  }
+
+  async getFeeSettlement(id: string): Promise<FeeSettlement | undefined> {
+    throw new Error("Fee settlement operations require DatabaseStorage.");
+  }
+
+  async getAllFeeSettlements(): Promise<FeeSettlement[]> {
+    throw new Error("Fee settlement operations require DatabaseStorage.");
+  }
+
+  async updateFeeSettlementStatus(id: string, status: string, paidAt?: Date): Promise<FeeSettlement | undefined> {
+    throw new Error("Fee settlement operations require DatabaseStorage.");
+  }
+
+  async getAccumulatedFees(currency: string, merchantId?: string | null): Promise<{ total: string; count: number }> {
+    throw new Error("Fee settlement operations require DatabaseStorage.");
+  }
+
+  async getInvoicesWithUnforwardedFees(currency: string, limit?: number): Promise<Invoice[]> {
+    throw new Error("Fee settlement operations require DatabaseStorage.");
+  }
+
+  async getOverdueSettlements(graceDays: number): Promise<FeeSettlement[]> {
+    throw new Error("Fee settlement operations require DatabaseStorage.");
+  }
 }
 
 // DatabaseStorage implementation for production-ready persistence
@@ -924,6 +964,89 @@ export class DatabaseStorage implements IStorage {
   async deleteFeePolicy(id: string): Promise<boolean> {
     const result = await db.delete(feePolicies).where(eq(feePolicies.id, id)).returning();
     return result.length > 0;
+  }
+
+  async createFeeSettlement(settlement: InsertFeeSettlement): Promise<FeeSettlement> {
+    const [created] = await db
+      .insert(feeSettlements)
+      .values({
+        currency: settlement.currency,
+        totalFeeAtomic: settlement.totalFeeAtomic,
+        invoiceCount: settlement.invoiceCount.toString(),
+        status: settlement.status || "pending",
+        operatorAddress: settlement.operatorAddress || null,
+        merchantId: settlement.merchantId || null,
+        dueAt: settlement.dueAt || null,
+      })
+      .returning();
+    return created;
+  }
+
+  async getFeeSettlement(id: string): Promise<FeeSettlement | undefined> {
+    const [settlement] = await db.select().from(feeSettlements).where(eq(feeSettlements.id, id));
+    return settlement || undefined;
+  }
+
+  async getAllFeeSettlements(): Promise<FeeSettlement[]> {
+    return await db.select().from(feeSettlements).orderBy(drizzleSql`${feeSettlements.createdAt} DESC`);
+  }
+
+  async updateFeeSettlementStatus(id: string, status: string, paidAt?: Date): Promise<FeeSettlement | undefined> {
+    const [updated] = await db
+      .update(feeSettlements)
+      .set({ status, paidAt: paidAt || null })
+      .where(eq(feeSettlements.id, id))
+      .returning();
+    return updated || undefined;
+  }
+
+  async getAccumulatedFees(currency: string, merchantId?: string | null): Promise<{ total: string; count: number }> {
+    const conditions = [
+      eq(invoices.status, "confirmed"),
+      eq(invoices.currency, currency),
+      eq(invoices.feeForwardingStatus, "accumulated"),
+    ];
+    if (merchantId) {
+      conditions.push(eq(invoices.merchantId, merchantId));
+    }
+
+    const result = await db
+      .select({
+        total: drizzleSql<string>`COALESCE(SUM(CAST(${invoices.feeAmountAtomic} AS BIGINT)), 0)::TEXT`,
+        count: drizzleSql<number>`COUNT(*)::INT`,
+      })
+      .from(invoices)
+      .where(and(...conditions));
+
+    return { total: result[0]?.total || "0", count: result[0]?.count || 0 };
+  }
+
+  async getInvoicesWithUnforwardedFees(currency: string, limit: number = 100): Promise<Invoice[]> {
+    return await db
+      .select()
+      .from(invoices)
+      .where(
+        and(
+          eq(invoices.status, "confirmed"),
+          eq(invoices.currency, currency),
+          eq(invoices.feeForwardingStatus, "accumulated"),
+          drizzleSql`${invoices.feeAmountAtomic} IS NOT NULL AND CAST(${invoices.feeAmountAtomic} AS BIGINT) > 0`
+        )
+      )
+      .limit(limit);
+  }
+
+  async getOverdueSettlements(graceDays: number): Promise<FeeSettlement[]> {
+    const cutoff = new Date(Date.now() - graceDays * 24 * 60 * 60 * 1000);
+    return await db
+      .select()
+      .from(feeSettlements)
+      .where(
+        and(
+          eq(feeSettlements.status, "pending"),
+          lt(feeSettlements.createdAt, cutoff)
+        )
+      );
   }
 }
 

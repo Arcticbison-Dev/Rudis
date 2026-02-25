@@ -31,8 +31,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Shield, Plus, Pencil, Trash2, LogOut, Lock, BarChart3, DollarSign } from "lucide-react";
-import type { FeePolicy } from "@shared/schema";
+import { Shield, Plus, Pencil, Trash2, LogOut, Lock, BarChart3, DollarSign, Wallet, CheckCircle, AlertTriangle } from "lucide-react";
+import type { FeePolicy, FeeSettlement } from "@shared/schema";
 
 function adminFetch(url: string, token: string, options: RequestInit = {}) {
   return fetch(url, {
@@ -300,6 +300,23 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
     },
   });
 
+  const { data: settlements, isLoading: settlementsLoading } = useQuery<FeeSettlement[]>({
+    queryKey: ["/admin/fee-settlements"],
+    queryFn: async () => {
+      const res = await adminFetch("/admin/fee-settlements", token);
+      if (!res.ok) throw new Error("Failed to fetch settlements");
+      return res.json();
+    },
+  });
+
+  const { data: feeStatus } = useQuery<{ feeCollectionEnabled: boolean; systemInGoodStanding: boolean; invoiceCreationBlocked: boolean }>({
+    queryKey: ["/api/fee-status"],
+    queryFn: async () => {
+      const res = await fetch("/api/fee-status");
+      return res.json();
+    },
+  });
+
   const handleCreateNew = () => {
     setEditingPolicy(null);
     setIsFormOpen(true);
@@ -330,6 +347,21 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
   const handleFormSuccess = () => {
     queryClient.invalidateQueries({ queryKey: ["/admin/fee-policies"] });
     queryClient.invalidateQueries({ queryKey: ["/admin/fee-report"] });
+  };
+
+  const handleMarkSettlementPaid = async (id: string) => {
+    try {
+      const res = await adminFetch(`/admin/fee-settlements/${id}/mark-paid`, token, { method: "POST" });
+      if (res.ok) {
+        toast({ title: "Settlement marked as paid" });
+        queryClient.invalidateQueries({ queryKey: ["/admin/fee-settlements"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/fee-status"] });
+      } else {
+        toast({ title: "Error", description: "Failed to update settlement", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Error", description: "Failed to update settlement", variant: "destructive" });
+    }
   };
 
   const formatAtomic = (value: string | null, currency: string) => {
@@ -420,6 +452,82 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
                 </div>
               ))}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {feeStatus && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between gap-2 flex-wrap">
+            <div>
+              <CardTitle className="text-lg">Fee Collection Status</CardTitle>
+              <CardDescription>Automatic fee forwarding and settlement tracking</CardDescription>
+            </div>
+            {feeStatus.invoiceCreationBlocked ? (
+              <Badge variant="destructive" className="gap-1">
+                <AlertTriangle className="h-3 w-3" />
+                Blocked
+              </Badge>
+            ) : feeStatus.feeCollectionEnabled ? (
+              <Badge variant="default" className="gap-1">
+                <CheckCircle className="h-3 w-3" />
+                Active
+              </Badge>
+            ) : (
+              <Badge variant="secondary">Not Configured</Badge>
+            )}
+          </CardHeader>
+          <CardContent>
+            {feeStatus.invoiceCreationBlocked && (
+              <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm mb-4" data-testid="text-fees-overdue-warning">
+                Invoice creation is blocked due to overdue fee settlements. Mark outstanding settlements as paid to resume.
+              </div>
+            )}
+            {settlementsLoading ? (
+              <Skeleton className="h-20 w-full" />
+            ) : !settlements || settlements.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {feeStatus.feeCollectionEnabled
+                  ? "No settlements yet. Fees accumulate and settlements are created automatically when the threshold is reached."
+                  : "Configure operator wallet addresses in environment variables to enable automatic fee collection."
+                }
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {settlements.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between gap-4 p-4 rounded-md border flex-wrap" data-testid={`settlement-row-${s.id}`}>
+                    <div className="space-y-1 min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Badge variant="outline">{s.currency}</Badge>
+                        <Badge variant={s.status === "paid" ? "default" : s.status === "overdue" ? "destructive" : "secondary"}>
+                          {s.status}
+                        </Badge>
+                        <span className="text-sm text-muted-foreground">{parseInt(s.invoiceCount).toLocaleString()} invoices</span>
+                      </div>
+                      <div className="text-sm font-medium">
+                        {formatAtomic(s.totalFeeAtomic, s.currency)}
+                      </div>
+                      <div className="text-xs text-muted-foreground flex gap-3 flex-wrap">
+                        <span>Created: {new Date(s.createdAt).toLocaleDateString()}</span>
+                        {s.dueAt && <span>Due: {new Date(s.dueAt).toLocaleDateString()}</span>}
+                        {s.paidAt && <span>Paid: {new Date(s.paidAt).toLocaleDateString()}</span>}
+                      </div>
+                      {s.operatorAddress && (
+                        <div className="text-xs text-muted-foreground font-mono truncate">
+                          Pay to: {s.operatorAddress.length > 20 ? `${s.operatorAddress.slice(0, 10)}...${s.operatorAddress.slice(-10)}` : s.operatorAddress}
+                        </div>
+                      )}
+                    </div>
+                    {s.status === "pending" && (
+                      <Button variant="outline" size="sm" onClick={() => handleMarkSettlementPaid(s.id)} data-testid={`button-mark-paid-${s.id}`}>
+                        <Wallet className="h-3 w-3 mr-1" />
+                        Mark Paid
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

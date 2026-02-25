@@ -29,6 +29,7 @@ export const invoices = pgTable("invoices", {
   feePolicyId: varchar("fee_policy_id"),
   feeAmountAtomic: varchar("fee_amount_atomic", { length: 30 }),
   feePercent: decimal("fee_percent", { precision: 8, scale: 4 }),
+  feeForwardingStatus: varchar("fee_forwarding_status", { length: 20 }),
 }, (table) => ({
   // Index for efficient Lightning Network invoice lookups
   lnCheckingIdIdx: index("ln_checking_id_idx").on(table.lnCheckingId),
@@ -190,3 +191,27 @@ export const insertFeePolicySchema = createInsertSchema(feePolicies).omit({
 
 export type InsertFeePolicy = z.infer<typeof insertFeePolicySchema>;
 export type FeePolicy = typeof feePolicies.$inferSelect;
+
+export const feeSettlements = pgTable("fee_settlements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  currency: varchar("currency", { length: 10 }).notNull(),
+  totalFeeAtomic: varchar("total_fee_atomic", { length: 30 }).notNull(),
+  invoiceCount: varchar("invoice_count", { length: 10 }).notNull().default("0"),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  operatorAddress: text("operator_address"),
+  merchantId: varchar("merchant_id", { length: 100 }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  paidAt: timestamp("paid_at"),
+  dueAt: timestamp("due_at"),
+});
+
+export type FeeSettlement = typeof feeSettlements.$inferSelect;
+export type InsertFeeSettlement = {
+  currency: string;
+  totalFeeAtomic: string;
+  invoiceCount: number;
+  status?: string;
+  operatorAddress?: string;
+  merchantId?: string;
+  dueAt?: Date;
+};
