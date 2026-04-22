@@ -60,8 +60,15 @@ const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || "";
 // Optional API key for invoice creation
 const INVOICE_API_KEY = process.env.INVOICE_API_KEY || "";
 
-// Simulation configuration  
+// Simulation configuration
+// SAFETY: Simulation mode is blocked in production to prevent invoice fraud.
 const SIMULATION_ENABLED = process.env.SIMULATION_ENABLED === "true";
+if (SIMULATION_ENABLED && process.env.NODE_ENV === "production") {
+  throw new Error(
+    "SIMULATION_ENABLED cannot be true in production (NODE_ENV=production). " +
+    "Disable simulation mode before deploying."
+  );
+}
 const ADMIN_SIM_TOKEN = process.env.ADMIN_SIM_TOKEN || "";
 
 let feeForwardingLnClient: LNbitsClient | null = null;
@@ -113,6 +120,15 @@ const simulationLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Rate limiter for admin API and metrics endpoints
+const adminApiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60, // 60 requests per minute per IP (generous for dashboards, still blocks scrapers)
+  message: { error: "Too many admin requests, please try again later" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // HMAC signature generation for webhook security
 function generateWebhookSignature(payload: any): string {
   if (!ALT_WEBHOOK_SECRET || ALT_WEBHOOK_SECRET.length === 0) {
@@ -127,27 +143,43 @@ function generateWebhookSignature(payload: any): string {
 }
 
 // Rail authentication middleware
+/**
+ * Timing-safe token comparison.
+ * Prevents timing attacks where an attacker can deduce valid tokens
+ * by measuring response time differences byte-by-byte.
+ * Handles length mismatches by always running a dummy comparison.
+ */
+function timingSafeTokenCompare(provided: string, expected: string): boolean {
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  // Pad shorter buffer to prevent length leakage, then compare full expected-length slice
+  if (a.length !== b.length) {
+    // Run a dummy comparison to prevent timing shortcut on length check
+    crypto.timingSafeEqual(b, b);
+    return false;
+  }
+  return crypto.timingSafeEqual(a, b);
+}
+
+/** Extract Bearer token from Authorization header, or return null */
+function extractBearerToken(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
+  const token = authHeader.substring(7);
+  return token.length > 0 ? token : null;
+}
+
 function authenticateRailCallback(req: Request, res: Response, next: NextFunction) {
-  // Fail fast if RAIL_AUTH_TOKEN is not configured
-  if (!RAIL_AUTH_TOKEN || RAIL_AUTH_TOKEN.length === 0) {
-    console.error("CRITICAL: RAIL_AUTH_TOKEN not configured but rail callback endpoint called");
+  if (!RAIL_AUTH_TOKEN) {
+    console.error("CRITICAL: RAIL_AUTH_TOKEN not configured");
     return res.status(500).json({ error: "Server configuration error" });
   }
-  
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    console.warn("Rail callback rejected: missing or invalid Authorization header");
+  const token = extractBearerToken(req);
+  if (!token || !timingSafeTokenCompare(token, RAIL_AUTH_TOKEN)) {
+    console.warn("Rail callback rejected: invalid or missing token");
     return res.status(401).json({ error: "Unauthorized" });
   }
-  
-  const token = authHeader.substring(7);
-  
-  if (!token || token.length === 0 || token !== RAIL_AUTH_TOKEN) {
-    console.warn("Rail callback rejected: invalid token");
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  
   next();
 }
 
@@ -156,95 +188,55 @@ function authenticateSimulation(req: Request, res: Response, next: NextFunction)
   if (!SIMULATION_ENABLED) {
     return res.status(403).json({ error: "simulation_disabled" });
   }
-  
-  // Fail fast if ADMIN_SIM_TOKEN is not configured
-  if (!ADMIN_SIM_TOKEN || ADMIN_SIM_TOKEN.length === 0) {
+  if (!ADMIN_SIM_TOKEN) {
     console.error("CRITICAL: SIMULATION_ENABLED=true but ADMIN_SIM_TOKEN not configured");
     return res.status(500).json({ error: "Server configuration error" });
   }
-  
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  const token = extractBearerToken(req);
+  if (!token || !timingSafeTokenCompare(token, ADMIN_SIM_TOKEN)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  
-  const token = authHeader.substring(7);
-  
-  if (!token || token.length === 0 || token !== ADMIN_SIM_TOKEN) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  
   next();
 }
 
-// Authenticate admin operations (privacy, etc.) - works in production independent of simulation
+// Admin operations token — uses ADMIN_PRIVACY_TOKEN (separate from simulation token)
+const ADMIN_PRIVACY_TOKEN = process.env.ADMIN_PRIVACY_TOKEN || "";
+
+// Authenticate admin privacy/anonymization operations
+// Uses ADMIN_PRIVACY_TOKEN — separate from ADMIN_SIM_TOKEN to prevent sim creds granting prod access
 function authenticateAdmin(req: Request, res: Response, next: NextFunction) {
-  // Fail fast if ADMIN_SIM_TOKEN is not configured
-  if (!ADMIN_SIM_TOKEN || ADMIN_SIM_TOKEN.length === 0) {
-    console.error("CRITICAL: ADMIN_SIM_TOKEN not configured for admin operations");
+  const secret = ADMIN_PRIVACY_TOKEN || ADMIN_API_TOKEN; // Fall back to ADMIN_API_TOKEN if ADMIN_PRIVACY_TOKEN not set
+  if (!secret) {
+    console.error("CRITICAL: Neither ADMIN_PRIVACY_TOKEN nor ADMIN_API_TOKEN configured for admin operations");
     return res.status(500).json({ error: "Server configuration error" });
   }
-  
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  const token = extractBearerToken(req);
+  if (!token || !timingSafeTokenCompare(token, secret)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  
-  const token = authHeader.substring(7);
-  
-  if (!token || token.length === 0 || token !== ADMIN_SIM_TOKEN) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  
   next();
 }
 
 // Authenticate admin API operations (Step 5.3: Security for admin endpoints)
-// Uses ADMIN_API_TOKEN for production admin endpoints (viewing invoices, metrics, etc.)
 function authenticateAdminApi(req: Request, res: Response, next: NextFunction) {
-  // Fail fast if ADMIN_API_TOKEN is not configured
-  if (!ADMIN_API_TOKEN || ADMIN_API_TOKEN.length === 0) {
-    console.error("CRITICAL: ADMIN_API_TOKEN not configured for admin API operations");
+  if (!ADMIN_API_TOKEN) {
+    console.error("CRITICAL: ADMIN_API_TOKEN not configured");
     return res.status(500).json({ error: "Server configuration error" });
   }
-  
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  const token = extractBearerToken(req);
+  if (!token || !timingSafeTokenCompare(token, ADMIN_API_TOKEN)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-  
-  const token = authHeader.substring(7);
-  
-  if (!token || token.length === 0 || token !== ADMIN_API_TOKEN) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  
   next();
 }
 
 // Optional API key authentication for invoice creation
-// When INVOICE_API_KEY is set, POST /api/invoices requires Authorization: Bearer <key>
-// When not set, the endpoint remains public (rate-limited only)
 function authenticateInvoiceApiKey(req: Request, res: Response, next: NextFunction) {
-  if (!INVOICE_API_KEY || INVOICE_API_KEY.length === 0) {
-    return next();
-  }
-
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  if (!INVOICE_API_KEY) return next(); // Public when not configured
+  const token = extractBearerToken(req);
+  if (!token || !timingSafeTokenCompare(token, INVOICE_API_KEY)) {
     return res.status(401).json({ error: "Unauthorized" });
   }
-
-  const token = authHeader.substring(7);
-
-  if (!token || token.length === 0 || token !== INVOICE_API_KEY) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
   next();
 }
 
@@ -836,7 +828,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // Monitoring metrics endpoint
-  app.get("/metrics", (req, res) => {
+  app.get("/metrics", adminApiLimiter, authenticateAdminApi, (req, res) => {
     const metrics = monitoring.getMetrics();
     res.json(metrics);
   });
@@ -864,7 +856,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
    * - limit: Applied limit
    * - offset: Applied offset
    */
-  app.get("/admin/invoices", authenticateAdminApi, async (req, res) => {
+  app.get("/admin/invoices", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     try {
       // Parse and validate query parameters
       const rail = req.query.rail as string | undefined;
@@ -1030,7 +1022,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
    *   payment_state: { state, txid, confirmations, last_checked, ... } // BTC only
    * }
    */
-  app.get("/admin/invoices/:id", authenticateAdminApi, async (req, res) => {
+  app.get("/admin/invoices/:id", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     try {
       const { id } = req.params;
       
@@ -2228,7 +2220,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Fee Policy Admin Endpoints (protected by ADMIN_API_TOKEN)
   // ============================================================================
 
-  app.get("/admin/fee-policies", authenticateAdminApi, async (req, res) => {
+  app.get("/admin/fee-policies", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     try {
       const policies = await storage.getAllFeePolicies();
       res.json(policies);
@@ -2237,7 +2229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get("/admin/fee-policies/:id", authenticateAdminApi, async (req, res) => {
+  app.get("/admin/fee-policies/:id", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     try {
       const policy = await storage.getFeePolicy(req.params.id);
       if (!policy) {
@@ -2249,7 +2241,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/admin/fee-policies", authenticateAdminApi, async (req, res) => {
+  app.post("/admin/fee-policies", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     try {
       const validatedData = insertFeePolicySchema.parse(req.body);
       const policy = await storage.createFeePolicy(validatedData);
@@ -2294,7 +2286,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Fee summary report - aggregate fees collected within a date range
-  app.get("/admin/fee-report", authenticateAdminApi, async (req, res) => {
+  app.get("/admin/fee-report", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     try {
       const from = req.query.from ? new Date(req.query.from as string) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
       const to = req.query.to ? new Date(req.query.to as string) : new Date();
@@ -2335,7 +2327,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Fee settlement management endpoints
-  app.get("/admin/fee-settlements", authenticateAdminApi, async (req, res) => {
+  app.get("/admin/fee-settlements", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     try {
       const settlements = await storage.getAllFeeSettlements();
       res.json(settlements);
@@ -2344,7 +2336,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/admin/fee-settlements/:id/mark-paid", authenticateAdminApi, async (req, res) => {
+  app.post("/admin/fee-settlements/:id/mark-paid", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     try {
       const settlement = await storage.getFeeSettlement(req.params.id);
       if (!settlement) {
@@ -2360,7 +2352,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post("/admin/fee-settlements/check", authenticateAdminApi, async (req, res) => {
+  app.post("/admin/fee-settlements/check", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     try {
       await checkAndCreateSettlements();
       const settlements = await storage.getAllFeeSettlements();

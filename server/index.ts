@@ -79,6 +79,23 @@ process.on("SIGINT", () => {
 
 const app = express();
 
+// ── Security headers (no Helmet dependency — applied manually) ────────────────
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '0'); // Disabled — modern browsers don't need it and it can cause issues
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  // CSP: API-only service — no inline scripts/styles needed
+  res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  // Remove fingerprinting headers
+  res.removeHeader('X-Powered-By');
+  next();
+});
+
 declare module 'http' {
   interface IncomingMessage {
     rawBody: unknown
