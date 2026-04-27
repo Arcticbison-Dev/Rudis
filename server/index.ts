@@ -89,8 +89,10 @@ app.use((_req, res, next) => {
   if (process.env.NODE_ENV === 'production') {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
-  // CSP: API-only service — no inline scripts/styles needed
-  res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  // CSP: apply strict policy only to API routes; frontend is served by Vite and manages its own CSP
+  if (req.path.startsWith('/api')) {
+    res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  }
   // Remove fingerprinting headers
   res.removeHeader('X-Powered-By');
   next();
