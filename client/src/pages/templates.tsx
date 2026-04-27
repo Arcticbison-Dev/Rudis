@@ -4,9 +4,24 @@ import { type Template, type InsertTemplate, insertTemplateSchema } from "@share
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Pencil, Trash2, FileText } from "lucide-react";
+import { Plus, Pencil, Trash2, FileText, PlayCircle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -43,6 +58,7 @@ export default function Templates() {
   const queryClient = useQueryClient();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
+  const [deletingTemplate, setDeletingTemplate] = useState<Template | null>(null);
 
   const { data: templates, isLoading } = useQuery<Template[]>({
     queryKey: ["/api/templates"],
@@ -147,9 +163,14 @@ export default function Templates() {
     }
   };
 
-  const handleDeleteTemplate = (id: string, planName: string) => {
-    if (window.confirm(`Are you sure you want to delete "${planName}"?`)) {
-      deleteTemplateMutation.mutate(id);
+  const handleDeleteTemplate = (template: Template) => {
+    setDeletingTemplate(template);
+  };
+
+  const confirmDeleteTemplate = () => {
+    if (deletingTemplate) {
+      deleteTemplateMutation.mutate(deletingTemplate.id);
+      setDeletingTemplate(null);
     }
   };
 
@@ -240,30 +261,48 @@ export default function Templates() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => handleCreateFromTemplate(template)}
-                      data-testid={`button-use-template-${template.id}`}
-                    >
-                      <Plus className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => handleEditClick(template)}
-                      data-testid={`button-edit-template-${template.id}`}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => handleDeleteTemplate(template.id, template.planName)}
-                      data-testid={`button-delete-template-${template.id}`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-1.5"
+                          onClick={() => handleCreateFromTemplate(template)}
+                          data-testid={`button-use-template-${template.id}`}
+                        >
+                          <PlayCircle className="h-3.5 w-3.5" />
+                          Use
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Create invoice from this template</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => handleEditClick(template)}
+                          data-testid={`button-edit-template-${template.id}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Edit template</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => handleDeleteTemplate(template)}
+                          data-testid={`button-delete-template-${template.id}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Delete template</TooltipContent>
+                    </Tooltip>
                   </div>
                 </div>
               </CardHeader>
@@ -439,6 +478,28 @@ export default function Templates() {
           </Form>
         </DialogContent>
       </Dialog>
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={!!deletingTemplate} onOpenChange={(open) => { if (!open) setDeletingTemplate(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete template?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete <strong>&ldquo;{deletingTemplate?.planName}&rdquo;</strong>.
+              Existing invoices created from this template are not affected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={confirmDeleteTemplate}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

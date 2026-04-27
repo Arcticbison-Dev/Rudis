@@ -1,4 +1,5 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useContext } from "react";
+import { AdminAuthContext } from "@/contexts/admin-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -622,15 +623,22 @@ function AdminDashboard({ token, onLogout }: { token: string; onLogout: () => vo
 }
 
 export default function Admin() {
+  const { setAdminAuthed } = useContext(AdminAuthContext);
   const [token, setToken] = useState(() => sessionStorage.getItem("admin_token") || "");
+
+  const handleAuthenticate = useCallback((newToken: string) => {
+    setToken(newToken);
+    setAdminAuthed(true);
+  }, [setAdminAuthed]);
 
   const handleLogout = useCallback(() => {
     sessionStorage.removeItem("admin_token");
     setToken("");
-  }, []);
+    setAdminAuthed(false);
+  }, [setAdminAuthed]);
 
   if (!token) {
-    return <AdminAuth onAuthenticate={setToken} />;
+    return <AdminAuth onAuthenticate={handleAuthenticate} />;
   }
 
   return <AdminDashboard token={token} onLogout={handleLogout} />;

@@ -1,75 +1,214 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { type Invoice } from "@shared/schema";
 import { InvoiceCard } from "@/components/invoice-card";
 import { StatsCard } from "@/components/stats-card";
 import { Button } from "@/components/ui/button";
-import { FileText, CheckCircle, Clock, XCircle, Plus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { FileText, CheckCircle, Clock, XCircle, Plus, Bitcoin, TrendingUp, Search } from "lucide-react";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+interface StatsData {
+  counts: { total: number; pending: number; paid: number; expired: number };
+  volume: Record<string, { atomic: string; formatted: string }>;
+}
+
+const RAIL_LABELS: Record<string, { label: string; unit: string; decimals: number }> = {
+  BTC:       { label: "Bitcoin",  unit: "BTC",  decimals: 8  },
+  Lightning: { label: "Lightning", unit: "BTC", decimals: 8  },
+  XMR:       { label: "Monero",   unit: "XMR",  decimals: 6  },
+};
+
+const PAGE_SIZE = 20;
+
+type StatusFilter = "all" | "pending" | "paid" | "expired";
 
 export default function Dashboard() {
-  const { data: invoices, isLoading } = useQuery<Invoice[]>({
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+
+  const { data: invoices, isLoading: invoicesLoading } = useQuery<Invoice[]>({
     queryKey: ["/api/invoices"],
   });
 
-  const stats = {
-    total: invoices?.length || 0,
-    pending: invoices?.filter((inv) => inv.status === "pending").length || 0,
-    paid: invoices?.filter((inv) => inv.status === "paid").length || 0,
-    expired: invoices?.filter((inv) => inv.status === "expired").length || 0,
+  const { data: statsData, isLoading: statsLoading } = useQuery<StatsData>({
+    queryKey: ["/api/stats"],
+    refetchInterval: 30_000,
+  });
+
+  // Filter + search
+  const filtered = (invoices ?? []).filter((inv) => {
+    if (statusFilter !== "all" && inv.status !== statusFilter) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      return (
+        inv.id.toLowerCase().includes(q) ||
+        (inv.description?.toLowerCase().includes(q)) ||
+        inv.currency.toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
+
+  // Sort newest first
+  const sorted = [...filtered].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const paginated = sorted.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  const counts = statsData?.counts ?? {
+    total: invoices?.length ?? 0,
+    pending: invoices?.filter((i) => i.status === "pending").length ?? 0,
+    paid: invoices?.filter((i) => i.status === "paid").length ?? 0,
+    expired: invoices?.filter((i) => i.status === "expired").length ?? 0,
+  };
+
+  const handleStatusChange = (v: string) => {
+    setStatusFilter(v as StatusFilter);
+    setPage(1);
+  };
+
+  const handleSearch = (v: string) => {
+    setSearch(v);
+    setPage(1);
   };
 
   return (
     <div className="space-y-8">
+      {/* Header */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-3xl md:text-4xl font-semibold tracking-tight" data-testid="heading-dashboard">
             Dashboard
           </h1>
           <p className="text-sm text-muted-foreground mt-2">
-            Manage your crypto payment invoices
+            Crypto payment invoice management
           </p>
         </div>
         <Link href="/create">
           <Button size="lg" className="gap-2" data-testid="button-create-invoice">
             <Plus className="h-4 w-4" />
-            Create Invoice
+            New Invoice
           </Button>
         </Link>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+      {/* Status counts */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
         <StatsCard
           title="Total Invoices"
-          value={stats.total}
+          value={counts.total}
           icon={FileText}
           description="All time"
         />
         <StatsCard
           title="Pending"
-          value={stats.pending}
+          value={counts.pending}
           icon={Clock}
           description="Awaiting payment"
         />
         <StatsCard
           title="Paid"
-          value={stats.paid}
+          value={counts.paid}
           icon={CheckCircle}
-          description="Successfully paid"
+          description="Successfully settled"
         />
         <StatsCard
           title="Expired"
-          value={stats.expired}
+          value={counts.expired}
           icon={XCircle}
           description="Timed out"
         />
       </div>
 
+      {/* Revenue / volume panel */}
       <div>
-        <h2 className="text-xl md:text-2xl font-semibold mb-6">Recent Invoices</h2>
-        
-        {isLoading ? (
+        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <TrendingUp className="h-4 w-4 text-orange-500" />
+          Volume Received
+        </h2>
+        {statsLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-24 rounded-lg" />)}
+          </div>
+        ) : statsData && Object.keys(statsData.volume).length > 0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Object.entries(statsData.volume).map(([rail, vol]) => {
+              const meta = RAIL_LABELS[rail] ?? { label: rail, unit: rail, decimals: 8 };
+              const displayAmount = parseFloat(vol.formatted).toFixed(meta.decimals);
+              return (
+                <Card key={rail} className="bg-muted/30 border-border/60">
+                  <CardHeader className="pb-1 pt-4 px-4">
+                    <CardTitle className="text-sm font-medium text-muted-foreground">
+                      {meta.label}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="pb-4 px-4">
+                    <div className="font-mono font-bold text-xl tabular-nums">
+                      {displayAmount}
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-0.5">{meta.unit} received</div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        ) : (
+          <Card className="border-dashed border-border/40">
+            <CardContent className="flex items-center justify-center py-8 text-sm text-muted-foreground">
+              No payments received yet
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      {/* Invoice list with filter + search + pagination */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <h2 className="text-xl font-semibold">Invoices</h2>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                placeholder="Search by ID or description..."
+                value={search}
+                onChange={(e) => handleSearch(e.target.value)}
+                className="pl-8 w-56 h-8 text-sm"
+              />
+            </div>
+            <Select value={statusFilter} onValueChange={handleStatusChange}>
+              <SelectTrigger className="w-32 h-8 text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="pending">Pending</SelectItem>
+                <SelectItem value="paid">Paid</SelectItem>
+                <SelectItem value="expired">Expired</SelectItem>
+              </SelectContent>
+            </Select>
+            {filtered.length !== (invoices?.length ?? 0) && (
+              <Badge variant="secondary" className="text-xs">
+                {filtered.length} of {invoices?.length ?? 0}
+              </Badge>
+            )}
+          </div>
+        </div>
+
+        {invoicesLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {[...Array(6)].map((_, i) => (
               <Card key={i}>
@@ -81,12 +220,51 @@ export default function Dashboard() {
               </Card>
             ))}
           </div>
+        ) : paginated.length > 0 ? (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+              {paginated.map((invoice) => (
+                <InvoiceCard key={invoice.id} invoice={invoice} />
+              ))}
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between pt-2">
+                <p className="text-sm text-muted-foreground">
+                  Page {page} of {totalPages} · {filtered.length} invoices
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
         ) : invoices && invoices.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {invoices.map((invoice) => (
-              <InvoiceCard key={invoice.id} invoice={invoice} />
-            ))}
-          </div>
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-12 px-6 text-center">
+              <Search className="h-10 w-10 text-muted-foreground mb-3" />
+              <h3 className="text-base font-semibold mb-1">No invoices match your filter</h3>
+              <p className="text-sm text-muted-foreground">
+                Try adjusting the status filter or search query.
+              </p>
+            </CardContent>
+          </Card>
         ) : (
           <Card className="border-dashed">
             <CardContent className="flex flex-col items-center justify-center py-16 px-6 text-center">

@@ -1,12 +1,37 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Send, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { Link } from "wouter";
 import { CopyButton } from "@/components/copy-button";
 import { Badge } from "@/components/ui/badge";
+import { useState } from "react";
+
+interface TestWebhookResult {
+  success: boolean;
+  statusCode?: number;
+  url?: string;
+  error?: string;
+  message?: string;
+}
 
 export default function ApiDocs() {
   const baseUrl = window.location.origin;
+  const [testResult, setTestResult] = useState<TestWebhookResult | null>(null);
+  const [testLoading, setTestLoading] = useState(false);
+
+  const handleSendTestWebhook = async () => {
+    setTestLoading(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/webhooks/test", { method: "POST" });
+      const data = await res.json();
+      setTestResult(data);
+    } catch (err: any) {
+      setTestResult({ success: false, error: err.message, message: "Failed to call test endpoint" });
+    } finally {
+      setTestLoading(false);
+    }
+  };
 
   const endpoints = [
     {
@@ -90,7 +115,7 @@ export default function ApiDocs() {
         {
           id: "log-id",
           invoiceId: "550e8400-e29b-41d4-a716-446655440000",
-          url: "https://main.altostratus.app/webhooks/payment",
+          url: "https://yourapp.example.com/webhooks/payment",
           status: "success",
           statusCode: "200",
           attempt: "1",
@@ -219,6 +244,70 @@ export default function ApiDocs() {
         </CardContent>
       </Card>
 
+      {/* Webhook Test Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Send className="h-4 w-4 text-orange-500" />
+            Test Webhook Delivery
+          </CardTitle>
+          <CardDescription>
+            Send a signed test payload to your configured <code className="text-xs bg-muted px-1 py-0.5 rounded">RUDIS_WEBHOOK_URL</code> to verify your endpoint is working.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Button
+            onClick={handleSendTestWebhook}
+            disabled={testLoading}
+            className="gap-2"
+            data-testid="button-send-test-webhook"
+          >
+            {testLoading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+            {testLoading ? "Sending..." : "Send Test Webhook"}
+          </Button>
+
+          {testResult && (
+            <div className={`rounded-md p-4 border ${
+              testResult.success
+                ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800"
+                : "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800"
+            }`}>
+              <div className="flex items-center gap-2 mb-2">
+                {testResult.success ? (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                  <AlertCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+                )}
+                <p className={`text-sm font-medium ${
+                  testResult.success
+                    ? "text-emerald-900 dark:text-emerald-100"
+                    : "text-red-900 dark:text-red-100"
+                }`}>
+                  {testResult.message}
+                </p>
+              </div>
+              {testResult.statusCode && (
+                <p className="text-xs text-muted-foreground">HTTP {testResult.statusCode}</p>
+              )}
+              {testResult.error && (
+                <code className="text-xs text-red-700 dark:text-red-300 block mt-1">{testResult.error}</code>
+              )}
+              {testResult.url && (
+                <p className="text-xs text-muted-foreground mt-1 font-mono break-all">→ {testResult.url}</p>
+              )}
+            </div>
+          )}
+
+          <p className="text-xs text-muted-foreground">
+            The test payload includes <code className="bg-muted px-1 py-0.5 rounded">{'"_isTest": true'}</code> so your receiver can distinguish it from real payments. The payload is signed with the same HMAC secret as live webhooks.
+          </p>
+        </CardContent>
+      </Card>
+
       <div className="space-y-6">
         <h2 className="text-xl md:text-2xl font-semibold">Endpoints</h2>
         
@@ -299,14 +388,14 @@ export default function ApiDocs() {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm">
-            When an invoice is paid, Altostratus Payments will send a POST request to your configured webhook URL with HMAC-SHA256 signature for security.
+            When an invoice is paid, Rudis will send a POST request to your configured webhook URL with HMAC-SHA256 signature for security.
           </p>
           <div className="space-y-2 mb-4">
             <h4 className="text-sm font-semibold">Security Headers</h4>
             <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-md p-3">
-              <p className="text-xs font-medium text-blue-900 dark:text-blue-100 mb-1">X-Altostratus-Signature</p>
+              <p className="text-xs font-medium text-blue-900 dark:text-blue-100 mb-1">X-Rudis-Signature</p>
               <p className="text-xs text-blue-800 dark:text-blue-200">
-                HMAC-SHA256 signature of the payload using ALT_WEBHOOK_SECRET. Verify this signature to ensure the webhook is authentic.
+                HMAC-SHA256 signature of the payload using RUDIS_WEBHOOK_SECRET. Verify this signature to ensure the webhook is authentic.
               </p>
             </div>
           </div>
@@ -347,7 +436,7 @@ export default function ApiDocs() {
             </ul>
           </div>
           <p className="text-xs text-muted-foreground">
-            Set ALTOSTRATUS_WEBHOOK_URL and ALT_WEBHOOK_SECRET environment variables.
+            Set RUDIS_WEBHOOK_URL and RUDIS_WEBHOOK_SECRET environment variables.
           </p>
         </CardContent>
       </Card>
@@ -368,8 +457,8 @@ export default function ApiDocs() {
 const express = require('express');
 
 app.post('/webhooks/payment', express.json(), async (req, res) => {
-  const signature = req.headers['x-altostratus-signature'];
-  const secret = process.env.ALT_WEBHOOK_SECRET;
+  const signature = req.headers['x-rudis-signature'];
+  const secret = process.env.RUDIS_WEBHOOK_SECRET;
   
   // 1. Verify HMAC signature (timing-safe)
   // Defensive: Check signature exists and is valid hex string
@@ -447,8 +536,8 @@ app.post('/webhooks/payment', express.json(), async (req, res) => {
 const express = require('express');
 
 app.post('/webhooks/payment', express.json(), async (req, res) => {
-  const signature = req.headers['x-altostratus-signature'];
-  const secret = process.env.ALT_WEBHOOK_SECRET;
+  const signature = req.headers['x-rudis-signature'];
+  const secret = process.env.RUDIS_WEBHOOK_SECRET;
   
   // 1. Verify HMAC signature (timing-safe)
   // Defensive: Check signature exists and is valid hex string
@@ -536,8 +625,8 @@ app = Flask(__name__)
 
 @app.route('/webhooks/payment', methods=['POST'])
 def handle_payment_webhook():
-    signature = request.headers.get('X-Altostratus-Signature')
-    secret = os.environ['ALT_WEBHOOK_SECRET']
+    signature = request.headers.get('X-Rudis-Signature')
+    secret = os.environ['RUDIS_WEBHOOK_SECRET']
     
     # 1. Verify HMAC signature (timing-safe)
     # Defensive: Check signature exists and is valid hex string (64 chars for SHA256)
@@ -619,8 +708,8 @@ app = Flask(__name__)
 
 @app.route('/webhooks/payment', methods=['POST'])
 def handle_payment_webhook():
-    signature = request.headers.get('X-Altostratus-Signature')
-    secret = os.environ['ALT_WEBHOOK_SECRET']
+    signature = request.headers.get('X-Rudis-Signature')
+    secret = os.environ['RUDIS_WEBHOOK_SECRET']
     
     # 1. Verify HMAC signature (timing-safe)
     # Defensive: Check signature exists and is valid hex string (64 chars for SHA256)
@@ -721,8 +810,8 @@ type WebhookPayload struct {
 }
 
 func HandlePaymentWebhook(c *gin.Context) {
-    signature := c.GetHeader("X-Altostratus-Signature")
-    secret := os.Getenv("ALT_WEBHOOK_SECRET")
+    signature := c.GetHeader("X-Rudis-Signature")
+    secret := os.Getenv("RUDIS_WEBHOOK_SECRET")
     
     // 1. Read and verify HMAC signature (timing-safe)
     // Defensive: Check signature exists and is valid hex string (64 chars for SHA256)
@@ -829,8 +918,8 @@ type WebhookPayload struct {
 }
 
 func HandlePaymentWebhook(c *gin.Context) {
-    signature := c.GetHeader("X-Altostratus-Signature")
-    secret := os.Getenv("ALT_WEBHOOK_SECRET")
+    signature := c.GetHeader("X-Rudis-Signature")
+    secret := os.Getenv("RUDIS_WEBHOOK_SECRET")
     
     // 1. Read and verify HMAC signature (timing-safe)
     // Defensive: Check signature exists and is valid hex string (64 chars for SHA256)
@@ -920,7 +1009,7 @@ func HandlePaymentWebhook(c *gin.Context) {
               <li>🔒 <strong>REQUIRED:</strong> Implement idempotency - store processed (invoiceId, timestamp) pairs to prevent duplicate processing</li>
               <li>🔒 <strong>REQUIRED:</strong> Verify amount and currency match your database (anti-fraud/anti-tampering)</li>
               <li>✓ Use HTTPS only - never expose webhook endpoints over HTTP</li>
-              <li>✓ Store ALT_WEBHOOK_SECRET securely (environment variables, secrets manager)</li>
+              <li>✓ Store RUDIS_WEBHOOK_SECRET securely (environment variables, secrets manager)</li>
               <li>✓ Return 200 OK quickly - process async if needed to avoid retries</li>
               <li>✓ Log webhook processing for audit trail (timestamp, invoiceId, result)</li>
             </ul>
@@ -945,7 +1034,7 @@ func HandlePaymentWebhook(c *gin.Context) {
               <p className="text-xs text-muted-foreground">Webhook timeout in milliseconds (default: 10000)</p>
             </div>
             <div>
-              <h4 className="text-sm font-semibold mb-1">ALT_WEBHOOK_SECRET</h4>
+              <h4 className="text-sm font-semibold mb-1">RUDIS_WEBHOOK_SECRET</h4>
               <p className="text-xs text-muted-foreground">Secret for HMAC-SHA256 signing of webhooks</p>
             </div>
             <div>

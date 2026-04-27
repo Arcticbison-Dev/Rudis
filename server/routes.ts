@@ -56,7 +56,7 @@ const CLEANUP_EXPIRED_DAYS = Math.max(30, Math.min(90, parseIntWithDefault(proce
 const RETENTION_PAID_DAYS = parseIntWithDefault(process.env.RETENTION_PAID_DAYS, 90);
 const RETENTION_MAX_DAYS = parseIntWithDefault(process.env.RETENTION_MAX_DAYS, 365);
 const AUTO_ANONYMIZE_ENABLED = process.env.AUTO_ANONYMIZE_ENABLED !== "false";
-const ALT_WEBHOOK_SECRET = process.env.ALT_WEBHOOK_SECRET || "";
+const RUDIS_WEBHOOK_SECRET = process.env.RUDIS_WEBHOOK_SECRET || "";
 
 // Rail service configuration
 const RAIL_AUTH_TOKEN = process.env.RAIL_AUTH_TOKEN || "";
@@ -144,13 +144,13 @@ const adminApiLimiter = rateLimit({
 
 // HMAC signature generation for webhook security
 function generateWebhookSignature(payload: any): string {
-  if (!ALT_WEBHOOK_SECRET || ALT_WEBHOOK_SECRET.length === 0) {
+  if (!RUDIS_WEBHOOK_SECRET || RUDIS_WEBHOOK_SECRET.length === 0) {
     // This should never happen due to startup validation, but defense in depth
-    throw new Error("Cannot generate webhook signature: ALT_WEBHOOK_SECRET not configured");
+    throw new Error("Cannot generate webhook signature: RUDIS_WEBHOOK_SECRET not configured");
   }
   const payloadString = JSON.stringify(payload);
   return crypto
-    .createHmac("sha256", ALT_WEBHOOK_SECRET)
+    .createHmac("sha256", RUDIS_WEBHOOK_SECRET)
     .update(payloadString)
     .digest("hex");
 }
@@ -447,8 +447,8 @@ async function attemptWebhookDelivery(
       timeout: WEBHOOK_TIMEOUT_MS,
       headers: {
         "Content-Type": "application/json",
-        "User-Agent": "Altostratus-Payments/1.0",
-        "X-Altostratus-Signature": signature,
+        "User-Agent": "Rudis/1.0",
+        "X-Rudis-Signature": signature,
       },
       validateStatus: (status) => status < 500, // Don't throw on 4xx
     });
@@ -665,15 +665,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
   
   // Validate webhook security configuration
-  const webhookUrlConfigured = process.env.ALTOSTRATUS_WEBHOOK_URL && process.env.ALTOSTRATUS_WEBHOOK_URL.length > 0;
-  if (webhookUrlConfigured && (!ALT_WEBHOOK_SECRET || ALT_WEBHOOK_SECRET.length === 0)) {
+  const webhookUrlConfigured = process.env.RUDIS_WEBHOOK_URL && process.env.RUDIS_WEBHOOK_URL.length > 0;
+  if (webhookUrlConfigured && (!RUDIS_WEBHOOK_SECRET || RUDIS_WEBHOOK_SECRET.length === 0)) {
     console.error("╔═══════════════════════════════════════════════════════════╗");
-    console.error("║ FATAL: ALTOSTRATUS_WEBHOOK_URL set but ALT_WEBHOOK_SECRET║");
+    console.error("║ FATAL: RUDIS_WEBHOOK_URL set but RUDIS_WEBHOOK_SECRET║");
     console.error("║        not configured. Webhooks MUST be signed for       ║");
-    console.error("║        security. Set ALT_WEBHOOK_SECRET or remove         ║");
-    console.error("║        ALTOSTRATUS_WEBHOOK_URL from environment.          ║");
+    console.error("║        security. Set RUDIS_WEBHOOK_SECRET or remove         ║");
+    console.error("║        RUDIS_WEBHOOK_URL from environment.          ║");
     console.error("╚═══════════════════════════════════════════════════════════╝");
-    throw new Error("ALT_WEBHOOK_SECRET required when ALTOSTRATUS_WEBHOOK_URL is configured");
+    throw new Error("RUDIS_WEBHOOK_SECRET required when RUDIS_WEBHOOK_URL is configured");
   }
 
   // Initialize payment orchestrator
@@ -687,7 +687,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Log configuration status
   console.log("╔═══════════════════════════════════════════════════════════╗");
-  console.log("║         Altostratus Payments - Configuration             ║");
+  console.log("║         Rudis - Configuration             ║");
   console.log("╠═══════════════════════════════════════════════════════════╣");
   console.log(`║ Lightning:   ${ENABLE_LN ? "✓ ENABLED " : "✗ DISABLED"}                                   ║`);
   console.log(`║ Bitcoin:     ${ENABLE_BTC ? "✓ ENABLED " : "✗ DISABLED"}                                   ║`);
@@ -1157,7 +1157,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   /**
    * POST /payments - Create a new payment
    * 
-   * Clean, rail-agnostic API for Altostratus apps and external clients.
+   * Clean, rail-agnostic API for merchant apps and external clients.
    * Protected by RAIL_AUTH_TOKEN.
    * 
    * Request: { rail, amount_atomic, metadata? }
@@ -1443,6 +1443,61 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Dashboard stats: invoice counts + volume received by currency
+  app.get("/api/stats", async (req, res) => {
+    try {
+      await storage.checkAndExpireInvoices();
+      const invoices = await storage.getAllInvoices();
+
+      const counts = { total: 0, pending: 0, paid: 0, expired: 0 };
+      // Volume tracking: currency → total atomic units received (as bigint strings)
+      const volumeByRail: Record<string, bigint> = {};
+
+      for (const inv of invoices) {
+        counts.total++;
+        if (inv.status === "pending") counts.pending++;
+        else if (inv.status === "paid") counts.paid++;
+        else if (inv.status === "expired") counts.expired++;
+
+        if (inv.status === "paid" && inv.amountPaidAtomic) {
+          const rail = inv.currency || "BTC";
+          try {
+            const atomic = BigInt(inv.amountPaidAtomic);
+            volumeByRail[rail] = (volumeByRail[rail] || BigInt(0)) + atomic;
+          } catch {
+            // skip non-parseable values
+          }
+        }
+      }
+
+      // Format volumes: BTC/Lightning in sats (8 decimal places), XMR in atomic (12 dp)
+      const formatVolume = (rail: string, atomicBig: bigint): string => {
+        if (rail === "BTC" || rail === "Lightning") {
+          // sats → BTC (8 decimals)
+          const sats = Number(atomicBig);
+          return (sats / 1e8).toFixed(8);
+        } else if (rail === "XMR") {
+          // piconeros → XMR (12 decimals)
+          const atomic = Number(atomicBig);
+          return (atomic / 1e12).toFixed(12);
+        }
+        return atomicBig.toString();
+      };
+
+      const volume: Record<string, { atomic: string; formatted: string }> = {};
+      for (const [rail, atomicBig] of Object.entries(volumeByRail)) {
+        volume[rail] = {
+          atomic: atomicBig.toString(),
+          formatted: formatVolume(rail, atomicBig),
+        };
+      }
+
+      res.json({ counts, volume });
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to fetch stats" });
+    }
+  });
+
   // Get invoice by ID
   // SECURITY (Step 7.3): Filter response - no internal fields exposed
   app.get("/api/invoices/:id", async (req, res) => {
@@ -1704,9 +1759,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const invoice = invoices.find(inv => inv.lnCheckingId === checking_id);
       
       if (invoice) {
-        // Queue webhook to Altostratus app (if configured)
-        const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
-        if (altWebhookUrl) {
+        // Queue webhook to merchant app (if configured)
+        const rudisWebhookUrl = process.env.RUDIS_WEBHOOK_URL;
+        if (rudisWebhookUrl) {
           const webhookPayload = {
             invoiceId: invoice.id,
             status: "confirmed",
@@ -1715,7 +1770,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             timestamp: new Date().toISOString(),
           };
           
-          await queueWebhook(invoice.id, altWebhookUrl, webhookPayload);
+          await queueWebhook(invoice.id, rudisWebhookUrl, webhookPayload);
         }
         
         // Return success
@@ -1778,8 +1833,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await handleFeeForwarding(invoice, "LN");
       
-      const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
-      if (altWebhookUrl) {
+      const rudisWebhookUrl = process.env.RUDIS_WEBHOOK_URL;
+      if (rudisWebhookUrl) {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
@@ -1789,7 +1844,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           timestamp: new Date().toISOString(),
         };
         
-        await queueWebhook(invoiceId, altWebhookUrl, payload);
+        await queueWebhook(invoiceId, rudisWebhookUrl, payload);
       }
 
       res.json({ success: true });
@@ -1843,8 +1898,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await handleFeeForwarding(invoice, "BTC");
       
-      const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
-      if (altWebhookUrl) {
+      const rudisWebhookUrl = process.env.RUDIS_WEBHOOK_URL;
+      if (rudisWebhookUrl) {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
@@ -1854,7 +1909,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           timestamp: new Date().toISOString(),
         };
         
-        await queueWebhook(invoiceId, altWebhookUrl, payload);
+        await queueWebhook(invoiceId, rudisWebhookUrl, payload);
       }
 
       res.json({ success: true });
@@ -1908,8 +1963,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       await handleFeeForwarding(invoice, "XMR");
       
-      const altWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
-      if (altWebhookUrl) {
+      const rudisWebhookUrl = process.env.RUDIS_WEBHOOK_URL;
+      if (rudisWebhookUrl) {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
@@ -1919,7 +1974,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           timestamp: new Date().toISOString(),
         };
         
-        await queueWebhook(invoiceId, altWebhookUrl, payload);
+        await queueWebhook(invoiceId, rudisWebhookUrl, payload);
       }
 
       res.json({ success: true });
@@ -1986,10 +2041,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       console.log(JSON.stringify({ invoiceId, rail: "xmr", event: "confirmed", status: "confirmed" }));
 
-      // Queue webhook to main Altostratus app if configured
-      const altostratusWebhookUrl = process.env.ALTOSTRATUS_WEBHOOK_URL;
+      // Queue webhook to merchant app if configured
+      const rudisWebhookUrl = process.env.RUDIS_WEBHOOK_URL;
       
-      if (altostratusWebhookUrl && updatedInvoice) {
+      if (rudisWebhookUrl && updatedInvoice) {
         const webhookPayload = {
           invoiceId: updatedInvoice.id,
           status: updatedInvoice.status,
@@ -2001,7 +2056,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Store payload for persistent retries
 
         // Queue the webhook for delivery (will be processed by periodic worker)
-        await queueWebhook(invoiceId, altostratusWebhookUrl, webhookPayload);
+        await queueWebhook(invoiceId, rudisWebhookUrl, webhookPayload);
         
         // Attempt immediate delivery (don't wait for periodic processing)
         const webhooks = await storage.getPendingWebhooks();
@@ -2011,13 +2066,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await attemptWebhookDelivery(
             thisWebhook.id,
             invoiceId,
-            altostratusWebhookUrl,
+            rudisWebhookUrl,
             webhookPayload,
             attempt
           );
         }
-      } else if (!altostratusWebhookUrl) {
-        console.log(`No ALTOSTRATUS_WEBHOOK_URL configured, skipping outbound webhook`);
+      } else if (!rudisWebhookUrl) {
+        console.log(`No RUDIS_WEBHOOK_URL configured, skipping outbound webhook`);
       }
 
       res.json({
@@ -2130,6 +2185,79 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error: any) {
       // Silent error - endpoint returns error to caller
       res.status(500).json({ error: "Failed to clean up webhooks" });
+    }
+  });
+
+  // Send a test webhook to the configured RUDIS_WEBHOOK_URL
+  app.post("/api/webhooks/test", async (req, res) => {
+    const rudisWebhookUrl = process.env.RUDIS_WEBHOOK_URL;
+    if (!rudisWebhookUrl) {
+      return res.status(400).json({
+        success: false,
+        error: "RUDIS_WEBHOOK_URL is not configured",
+      });
+    }
+    if (!RUDIS_WEBHOOK_SECRET || RUDIS_WEBHOOK_SECRET.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "RUDIS_WEBHOOK_SECRET is not configured",
+      });
+    }
+
+    const testPayload = {
+      invoiceId: "test-" + randomUUID(),
+      status: "paid",
+      amount: "0.00001000",
+      currency: "BTC",
+      timestamp: new Date().toISOString(),
+      _isTest: true,
+    };
+
+    try {
+      const signature = generateWebhookSignature(testPayload);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+
+      let statusCode: number;
+      let responseBody: string;
+      try {
+        const response = await fetch(rudisWebhookUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": "Rudis/1.0",
+            "X-Rudis-Signature": signature,
+          },
+          body: JSON.stringify(testPayload),
+          signal: controller.signal,
+        });
+        statusCode = response.status;
+        responseBody = await response.text().catch(() => "");
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      const success = statusCode >= 200 && statusCode < 300;
+      res.json({
+        success,
+        statusCode,
+        url: rudisWebhookUrl,
+        payload: testPayload,
+        message: success
+          ? `Test webhook delivered successfully (HTTP ${statusCode})`
+          : `Webhook endpoint returned HTTP ${statusCode}`,
+      });
+    } catch (error: any) {
+      const isTimeout = error?.name === "AbortError";
+      res.status(200).json({
+        success: false,
+        url: rudisWebhookUrl,
+        payload: testPayload,
+        error: isTimeout ? "Request timed out" : (error?.message ?? "Unknown error"),
+        message: isTimeout
+          ? `Webhook timed out after ${WEBHOOK_TIMEOUT_MS}ms`
+          : "Failed to reach webhook endpoint",
+      });
     }
   });
 

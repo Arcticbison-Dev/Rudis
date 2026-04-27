@@ -5,7 +5,7 @@
  * Routes requests to appropriate rail adapters based on currency.
  * 
  * Benefits:
- * - Single, stable API for Altostratus applications
+ * - Single, stable API for merchant applications
  * - Centralized error handling and retry logic
  * - Feature flag support (ENABLE_BTC, ENABLE_XMR, ENABLE_LN)
  * - Rail-agnostic business logic

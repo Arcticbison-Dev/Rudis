@@ -182,7 +182,7 @@ const ALERT_CONDITIONS: AlertCondition[] = [
     threshold: 5,
     windowMs: 5 * 60 * 1000, // 5 minutes
     severity: "critical",
-    description: "5+ webhook delivery failures in 5 minutes (Altostratus may not receive notifications)",
+    description: "5+ webhook delivery failures in 5 minutes (Merchant may not receive notifications)",
   },
   {
     id: "rail_unavailable",
@@ -482,7 +482,7 @@ async function fireAlert(alert: Alert): Promise<void> {
           timeout: 5000,
           headers: {
             "Content-Type": "application/json",
-            "User-Agent": "Altostratus-Payments-Monitoring/1.0",
+            "User-Agent": "Rudis-Monitoring/1.0",
           },
         }
       );
