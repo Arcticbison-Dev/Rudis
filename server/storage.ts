@@ -55,6 +55,7 @@ export interface IStorage {
     invoiceId: string;
     url: string;
     status: string;
+    payload?: string;
     statusCode?: number;
     errorMessage?: string;
     attempt?: number;
@@ -282,6 +283,7 @@ export class MemStorage implements IStorage {
     invoiceId: string;
     url: string;
     status: string;
+    payload?: string;
     statusCode?: number;
     errorMessage?: string;
     attempt?: number;
@@ -293,6 +295,7 @@ export class MemStorage implements IStorage {
       invoiceId: log.invoiceId,
       url: log.url,
       status: log.status,
+      payload: log.payload || null,
       statusCode: log.statusCode?.toString() || null,
       errorMessage: log.errorMessage || null,
       attempt: log.attempt?.toString() || "1",
@@ -705,6 +708,7 @@ export class DatabaseStorage implements IStorage {
     invoiceId: string;
     url: string;
     status: string;
+    payload?: string;
     statusCode?: number;
     errorMessage?: string;
     attempt?: number;
@@ -716,6 +720,7 @@ export class DatabaseStorage implements IStorage {
         invoiceId: log.invoiceId,
         url: log.url,
         status: log.status,
+        payload: log.payload || null,
         statusCode: log.statusCode?.toString() || null,
         errorMessage: log.errorMessage || null,
         attempt: log.attempt?.toString() || "1",

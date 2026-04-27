@@ -66,6 +66,7 @@ export const webhookLogs = pgTable("webhook_logs", {
   retryAfter: timestamp("retry_after"), // When to retry next (for persistent queue)
   createdAt: timestamp("created_at").notNull().defaultNow(),
   lastAttemptAt: timestamp("last_attempt_at"),
+  payload: text("payload"), // JSON-serialized webhook body — persisted for crash-safe retry
 });
 
 export type WebhookLog = typeof webhookLogs.$inferSelect;

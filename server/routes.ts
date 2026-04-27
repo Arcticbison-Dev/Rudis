@@ -35,10 +35,23 @@ const parseIntWithDefault = (value: string | undefined, defaultValue: number): n
 const WEBHOOK_TIMEOUT_MS = parseIntWithDefault(process.env.WEBHOOK_TIMEOUT_MS, 10000);
 const WEBHOOK_MAX_ATTEMPTS = parseIntWithDefault(process.env.WEBHOOK_MAX_ATTEMPTS, 10);
 const WEBHOOK_MAX_AGE_HOURS = parseIntWithDefault(process.env.WEBHOOK_MAX_AGE_HOURS, 24);
+// Exponential backoff: 1s, 3s, 9s, 27s, 60s, 2m, 5m, 10m, 30m, 1hr
+// First 3 are overridable via env; beyond that the schedule is fixed
 const WEBHOOK_RETRY_DELAY_1 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_1, 1000);
 const WEBHOOK_RETRY_DELAY_2 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_2, 3000);
 const WEBHOOK_RETRY_DELAY_3 = parseIntWithDefault(process.env.WEBHOOK_RETRY_DELAY_3, 9000);
-const WEBHOOK_RETRY_DELAYS = [WEBHOOK_RETRY_DELAY_1, WEBHOOK_RETRY_DELAY_2, WEBHOOK_RETRY_DELAY_3];
+const WEBHOOK_RETRY_DELAYS = [
+  WEBHOOK_RETRY_DELAY_1,   // attempt 1 → attempt 2:  1s
+  WEBHOOK_RETRY_DELAY_2,   // attempt 2 → attempt 3:  3s
+  WEBHOOK_RETRY_DELAY_3,   // attempt 3 → attempt 4:  9s
+  27_000,                  // attempt 4 → attempt 5:  27s
+  60_000,                  // attempt 5 → attempt 6:  1 min
+  120_000,                 // attempt 6 → attempt 7:  2 min
+  300_000,                 // attempt 7 → attempt 8:  5 min
+  600_000,                 // attempt 8 → attempt 9:  10 min
+  1_800_000,               // attempt 9 → attempt 10: 30 min
+  3_600_000,               // attempt 10 → final:     1 hr
+];
 const CLEANUP_EXPIRED_DAYS = Math.max(30, Math.min(90, parseIntWithDefault(process.env.CLEANUP_EXPIRED_DAYS, 90)));
 const RETENTION_PAID_DAYS = parseIntWithDefault(process.env.RETENTION_PAID_DAYS, 90);
 const RETENTION_MAX_DAYS = parseIntWithDefault(process.env.RETENTION_MAX_DAYS, 365);
@@ -399,7 +412,7 @@ async function canonicalToApiResponse(payment: CanonicalPayment): Promise<Paymen
   return response;
 }
 
-// Queue a webhook for delivery (creates pending webhook log)
+// Queue a webhook for delivery (creates pending webhook log with persisted payload)
 async function queueWebhook(
   invoiceId: string,
   url: string,
@@ -409,10 +422,11 @@ async function queueWebhook(
     invoiceId,
     url,
     status: "pending",
+    payload: JSON.stringify(payload), // Persist payload so retries survive restarts
     attempt: 1,
     retryAfter: new Date(), // Immediate first attempt
   });
-  
+
   console.log(`Webhook queued for invoice ${invoiceId}, will attempt delivery immediately`);
   return webhookLog.id;
 }
@@ -511,20 +525,28 @@ async function attemptWebhookDelivery(
 }
 
 // Process all pending webhooks in the queue
-async function processWebhookQueue(invoicePayloads: Map<string, any>) {
+// Payloads are read from the DB (webhook.payload column) — no in-memory Map needed
+async function processWebhookQueue() {
   const pendingWebhooks = await storage.getPendingWebhooks();
   const now = new Date();
 
   for (const webhook of pendingWebhooks) {
-    // Check if it's time to retry
+    // Check if it's time to retry (DB-level filter already handles this, belt-and-suspenders)
     if (webhook.retryAfter && new Date(webhook.retryAfter) > now) {
-      continue; // Not yet time to retry
+      continue;
     }
 
-    // Get the payload for this invoice
-    const payload = invoicePayloads.get(webhook.invoiceId);
-    if (!payload) {
-      console.warn(`No payload found for webhook ${webhook.id}, skipping`);
+    // Read payload from DB — no dependency on in-memory Map
+    if (!webhook.payload) {
+      console.warn(`Webhook ${webhook.id} (invoice ${webhook.invoiceId}) has no persisted payload — skipping`);
+      continue;
+    }
+
+    let payload: any;
+    try {
+      payload = JSON.parse(webhook.payload);
+    } catch {
+      console.warn(`Webhook ${webhook.id} has malformed payload JSON — skipping`);
       continue;
     }
 
@@ -620,8 +642,8 @@ async function performDataRetentionCleanup() {
 // but are PUBLIC blockchain data, not PII - safe for long-term storage
 // Addresses in invoices are anonymized after 90 days (see above)
 
-// In-memory store for invoice payloads (needed for webhook retries after server restart)
-const invoicePayloads = new Map<string, any>();
+// Note: webhook payloads are now persisted in the DB (webhook_logs.payload column),
+// so no in-memory Map is needed for retries across restarts.
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Validate critical security configuration on startup
@@ -675,7 +697,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   
   // Start periodic webhook processing (every 5 seconds)
   setInterval(async () => {
-    await processWebhookQueue(invoicePayloads);
+    await processWebhookQueue();
   }, 5000);
 
   // Periodic invoice expiration check (every 30 seconds)
@@ -711,31 +733,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // Process any pending webhooks from previous server session on startup
+  // Payloads are persisted in the DB so no reconstruction needed
   console.log("Processing any pending webhooks from previous session...");
   setTimeout(async () => {
-    // Reconstruct payloads for pending webhooks by fetching invoices
-    const pendingWebhooks = await storage.getPendingWebhooks();
-    for (const webhook of pendingWebhooks) {
-      const invoice = await storage.getInvoice(webhook.invoiceId);
-      if (invoice) {
-        // Reconstruct the webhook payload
-        const transactions = await storage.getPaymentTransactionsByInvoice(webhook.invoiceId);
-        const latestTx = transactions[0];
-        if (latestTx) {
-          invoicePayloads.set(webhook.invoiceId, {
-            invoiceId: invoice.id,
-            amount: invoice.amount,
-            currency: invoice.currency,
-            status: invoice.status,
-            paidAt: invoice.paidAt,
-            transactionId: latestTx.transactionId,
-            confirmations: parseInt(latestTx.confirmations, 10),
-            blockHeight: latestTx.blockHeight ? parseInt(latestTx.blockHeight, 10) : undefined,
-          });
-        }
-      }
-    }
-    await processWebhookQueue(invoicePayloads);
+    await processWebhookQueue();
   }, 1000);
 
   // Health check endpoint (Step 3: Fast, no RPC calls, secure)
@@ -1714,7 +1715,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             timestamp: new Date().toISOString(),
           };
           
-          invoicePayloads.set(invoice.id, webhookPayload);
           await queueWebhook(invoice.id, altWebhookUrl, webhookPayload);
         }
         
@@ -1789,7 +1789,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           timestamp: new Date().toISOString(),
         };
         
-        invoicePayloads.set(invoiceId, payload);
         await queueWebhook(invoiceId, altWebhookUrl, payload);
       }
 
@@ -1855,7 +1854,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           timestamp: new Date().toISOString(),
         };
         
-        invoicePayloads.set(invoiceId, payload);
         await queueWebhook(invoiceId, altWebhookUrl, payload);
       }
 
@@ -1921,7 +1919,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           timestamp: new Date().toISOString(),
         };
         
-        invoicePayloads.set(invoiceId, payload);
         await queueWebhook(invoiceId, altWebhookUrl, payload);
       }
 
@@ -2002,7 +1999,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
 
         // Store payload for persistent retries
-        invoicePayloads.set(invoiceId, webhookPayload);
 
         // Queue the webhook for delivery (will be processed by periodic worker)
         await queueWebhook(invoiceId, altostratusWebhookUrl, webhookPayload);
@@ -2109,7 +2105,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Process pending webhooks manually (can be called by external scheduler)
   app.post("/api/webhooks/process-queue", async (req, res) => {
     try {
-      await processWebhookQueue(invoicePayloads);
+      await processWebhookQueue();
       const pendingCount = (await storage.getPendingWebhooks()).length;
       res.json({
         success: true,
