@@ -693,7 +693,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
   console.log(`║ Bitcoin:     ${ENABLE_BTC ? "✓ ENABLED " : "✗ DISABLED"}                                   ║`);
   console.log(`║ Monero:      ${ENABLE_XMR ? "✓ ENABLED " : "✗ DISABLED"}                                   ║`);
   console.log(`║ Simulation:  ${SIMULATION_ENABLED ? "⚠  ENABLED (DEV ONLY)" : "✓ DISABLED"}                         ║`);
+  console.log(`║ Invoice API: ${INVOICE_API_KEY ? "✓ PROTECTED  " : "⚠  OPEN (set INVOICE_API_KEY!)"}                   ║`);
   console.log("╚═══════════════════════════════════════════════════════════╝");
+
+  // Warn loudly if invoice API key is not set in production
+  if (!INVOICE_API_KEY && process.env.NODE_ENV === "production") {
+    console.error("╔═══════════════════════════════════════════════════════════╗");
+    console.error("║  ⚠  SECURITY WARNING                                      ║");
+    console.error("║  INVOICE_API_KEY is not set.                              ║");
+    console.error("║  POST /api/invoices is publicly accessible — anyone       ║");
+    console.error("║  can create invoices on your instance.                    ║");
+    console.error("║  Set INVOICE_API_KEY in your environment to restrict      ║");
+    console.error("║  invoice creation to authorized callers only.             ║");
+    console.error("╚═══════════════════════════════════════════════════════════╝");
+  }
   
   // Start periodic webhook processing (every 5 seconds)
   setInterval(async () => {

@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { FileText, CheckCircle, Clock, XCircle, Plus, Bitcoin, TrendingUp, Search } from "lucide-react";
+import { FileText, CheckCircle, Clock, XCircle, Plus, TrendingUp, Search, Download } from "lucide-react";
 import { Link } from "wouter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +32,41 @@ const RAIL_LABELS: Record<string, { label: string; unit: string; decimals: numbe
 const PAGE_SIZE = 20;
 
 type StatusFilter = "all" | "pending" | "paid" | "expired";
+
+function exportCSV(rows: Invoice[]) {
+  const headers = ["ID", "Status", "Currency", "Amount", "Description", "Created", "Paid", "Expires"];
+  const escape = (v: string | null | undefined) => {
+    if (v == null) return "";
+    const s = String(v);
+    return s.includes(",") || s.includes('"') || s.includes("\n")
+      ? `"${s.replace(/"/g, '""')}"`
+      : s;
+  };
+  const lines = [
+    headers.join(","),
+    ...rows.map((inv) =>
+      [
+        inv.id,
+        inv.status,
+        inv.currency,
+        inv.amount,
+        inv.description,
+        inv.createdAt  ? new Date(inv.createdAt).toISOString()  : "",
+        inv.paidAt     ? new Date(inv.paidAt).toISOString()     : "",
+        inv.expiresAt  ? new Date(inv.expiresAt).toISOString()  : "",
+      ]
+        .map(escape)
+        .join(",")
+    ),
+  ];
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `rudis-invoices-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function Dashboard() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -205,6 +240,17 @@ export default function Dashboard() {
                 {filtered.length} of {invoices?.length ?? 0}
               </Badge>
             )}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 text-sm"
+              onClick={() => exportCSV(sorted)}
+              disabled={sorted.length === 0}
+              title="Export filtered invoices as CSV"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Export
+            </Button>
           </div>
         </div>
 

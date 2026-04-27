@@ -78,6 +78,12 @@ const ENV_VARS = [
     example: "your-admin-token",
   },
   {
+    name: "INVOICE_API_KEY",
+    required: true,
+    description: "API key required to call POST /api/invoices. Without this, invoice creation is publicly accessible — any caller can create invoices on your instance.",
+    example: "a-long-random-api-key",
+  },
+  {
     name: "ENABLE_LN",
     required: false,
     description: "Enable Lightning Network payments (requires LN_SERVICE_URL)",

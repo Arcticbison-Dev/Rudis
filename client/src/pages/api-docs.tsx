@@ -244,6 +244,34 @@ export default function ApiDocs() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle>Authentication</CardTitle>
+          <CardDescription>
+            Invoice creation requires an API key when <code className="text-xs bg-muted px-1 py-0.5 rounded">INVOICE_API_KEY</code> is configured on the server.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            Pass your API key as a Bearer token in the <code className="text-xs bg-muted px-1 py-0.5 rounded">Authorization</code> header on all <code className="text-xs bg-muted px-1 py-0.5 rounded">POST /api/invoices</code> requests.
+          </p>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-sm font-semibold">Required header</h4>
+              <CopyButton value={`Authorization: Bearer YOUR_INVOICE_API_KEY`} />
+            </div>
+            <pre className="bg-muted p-3 rounded-md overflow-x-auto">
+              <code className="text-xs font-mono">Authorization: Bearer YOUR_INVOICE_API_KEY</code>
+            </pre>
+          </div>
+          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-md p-3">
+            <p className="text-xs text-amber-900 dark:text-amber-100">
+              <strong>Important:</strong> If <code className="bg-amber-100 dark:bg-amber-900 px-1 rounded">INVOICE_API_KEY</code> is not set on the server, invoice creation is publicly accessible. Always set this in production. See the <a href="/setup" className="underline">Setup page</a> for configuration details.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Webhook Test Card */}
       <Card>
         <CardHeader>
@@ -363,12 +391,13 @@ export default function ApiDocs() {
                       <code className="text-xs font-mono">
                         {`curl -X POST ${baseUrl}/api/invoices \\
   -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_INVOICE_API_KEY" \\
   -d '${JSON.stringify(endpoint.requestBody, null, 2)}'`}
                       </code>
                     </pre>
                     <div className="absolute top-2 right-2">
                       <CopyButton
-                        value={`curl -X POST ${baseUrl}/api/invoices -H "Content-Type: application/json" -d '${JSON.stringify(endpoint.requestBody)}'`}
+                        value={`curl -X POST ${baseUrl}/api/invoices -H "Content-Type: application/json" -H "Authorization: Bearer YOUR_INVOICE_API_KEY" -d '${JSON.stringify(endpoint.requestBody)}'`}
                       />
                     </div>
                   </div>
