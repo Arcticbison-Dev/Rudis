@@ -17,7 +17,7 @@ import { FileText, BookOpen, Plus, Layers, Shield, Zap, HelpCircle } from "lucid
 import { Link, useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
-import { AdminAuthContext } from "@/contexts/admin-auth";
+import { AdminAuthContext, useAdminAuth } from "@/contexts/admin-auth";
 
 function Router() {
   return (
