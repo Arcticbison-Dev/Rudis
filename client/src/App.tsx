@@ -59,7 +59,7 @@ function Header() {
             </div>
           </Link>
 
-          <nav className="hidden md:flex items-center gap-0.5">
+          <nav className="hidden sm:flex items-center gap-0.5">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = location === item.path || (item.path !== "/" && location.startsWith(item.path));
