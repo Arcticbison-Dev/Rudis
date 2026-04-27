@@ -80,7 +80,7 @@ process.on("SIGINT", () => {
 const app = express();
 
 // ── Security headers (no Helmet dependency — applied manually) ────────────────
-app.use((_req, res, next) => {
+app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '0'); // Disabled — modern browsers don't need it and it can cause issues
