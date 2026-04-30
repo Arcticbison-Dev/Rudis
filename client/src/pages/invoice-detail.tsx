@@ -120,6 +120,17 @@ export default function InvoiceDetail() {
             <p className="text-sm text-muted-foreground text-center">
               Scan this QR code with your {invoice.currency} wallet to make payment
             </p>
+            <div className="w-full">
+              <label className="text-xs font-medium text-muted-foreground block mb-1">
+                Payment Address
+              </label>
+              <div className="flex items-center gap-2 bg-muted rounded-md px-3 py-2">
+                <code className="text-xs font-mono break-all flex-1" data-testid="text-payment-address">
+                  {invoice.paymentAddress}
+                </code>
+                <CopyButton value={invoice.paymentAddress} />
+              </div>
+            </div>
           </CardContent>
         </Card>
 
