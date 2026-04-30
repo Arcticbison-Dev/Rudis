@@ -244,10 +244,15 @@ function authenticateAdminApi(req: Request, res: Response, next: NextFunction) {
 }
 
 // Optional API key authentication for invoice creation
+// Accepts either INVOICE_API_KEY (for external callers like Altostratus)
+// or ADMIN_API_TOKEN (for the Rudis admin UI when logged in)
 function authenticateInvoiceApiKey(req: Request, res: Response, next: NextFunction) {
   if (!INVOICE_API_KEY) return next(); // Public when not configured
   const token = extractBearerToken(req);
-  if (!token || !timingSafeTokenCompare(token, INVOICE_API_KEY)) {
+  if (!token) return res.status(401).json({ error: "Unauthorized" });
+  const validInvoiceKey = timingSafeTokenCompare(token, INVOICE_API_KEY);
+  const validAdminToken = ADMIN_API_TOKEN ? timingSafeTokenCompare(token, ADMIN_API_TOKEN) : false;
+  if (!validInvoiceKey && !validAdminToken) {
     return res.status(401).json({ error: "Unauthorized" });
   }
   next();

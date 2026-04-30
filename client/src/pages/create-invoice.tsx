@@ -126,7 +126,19 @@ export default function CreateInvoice() {
 
   const createInvoiceMutation = useMutation({
     mutationFn: async (data: InsertInvoice) => {
-      const response = await apiRequest("POST", "/api/invoices", data);
+      const adminToken = sessionStorage.getItem("admin_token");
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (adminToken) headers["Authorization"] = `Bearer ${adminToken}`;
+      const response = await fetch("/api/invoices", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`${response.status}: ${text}`);
+      }
       return response.json();
     },
     onSuccess: (data: any) => {
