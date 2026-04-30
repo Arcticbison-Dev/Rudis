@@ -59,7 +59,7 @@ integrations = ["javascript_mem_db:1.0.0", "javascript_database:1.0.0"]
 [userenv.shared]
 LNBITS_API_URL = "https://demo.lnbits.com"
 ENABLE_BTC = "true"
-BTC_NETWORK = "testnet"
+BTC_NETWORK = "mainnet"
 BTC_SERVICE_URL = "http://localhost:5002"
 ENABLE_XMR = "true"
 XMR_SERVICE_URL = "http://localhost:5003"
