@@ -169,6 +169,24 @@ export class LNbitsClient {
     }
   }
 
+  /**
+   * Get wallet info and balance
+   *
+   * Used for health checks — verifies LNbits connectivity and API key validity.
+   * GET /api/v1/wallet
+   */
+  async getWalletInfo(): Promise<{ id: string; name: string; balance: number }> {
+    try {
+      const response = await this.client.get<{ id: string; name: string; balance: number }>(
+        "/api/v1/wallet"
+      );
+      return response.data;
+    } catch (error) {
+      this.handleError(error, "getWalletInfo", {});
+      throw error;
+    }
+  }
+
   get canMakeOutboundPayments(): boolean {
     return !!this.adminClient;
   }
