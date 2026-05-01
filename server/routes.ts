@@ -819,14 +819,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
     }
     
-    // For Lightning Network, check if it's in stub/not_implemented mode
+    // For Lightning Network, check if LNbits is configured
     if (rail === "LN") {
-      const lnServiceUrl = process.env.LN_SERVICE_URL || "";
-      if (!lnServiceUrl) {
+      const lnbitsApiUrl = process.env.LNBITS_API_URL || "";
+      if (!lnbitsApiUrl) {
         return {
-          status: "not_implemented",
-          reason: "ln_not_implemented",
-          message: "Lightning Network service not configured (LN_SERVICE_URL not set)",
+          status: "not_configured",
+          reason: "ln_not_configured",
+          message: "Lightning Network not configured (LNBITS_API_URL not set)",
           health: {
             last_successful_poll_at: health.lastSuccessfulPollAt,
             last_poll_error_at: health.lastPollErrorAt,
