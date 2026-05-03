@@ -330,7 +330,8 @@ export class LnAdapter implements RailAdapter {
     }
 
     // Step 3: Amount validation
-    const amountSats = parseInt(request.amountAtomic, 10);
+    // amountAtomic is stored as BTC decimal (e.g. "0.00001271"), same as BTC adapter
+    const amountSats = Math.round(parseFloat(request.amountAtomic) * 100_000_000);
     
     if (isNaN(amountSats) || amountSats < this.config.minAmountSats) {
       logPaymentCreateFailed(
@@ -500,31 +501,13 @@ export class LnAdapter implements RailAdapter {
       };
     }
 
-    // Call LNbits GET /api/v1/wallet to verify connectivity and key validity
-    try {
-      const lnbitsClient = createLNbitsClient({
-        apiUrl: this.config.lnbitsApiUrl!,
-        walletKey: this.config.lnbitsWalletKey!,
-        httpTimeout: this.config.httpTimeout,
-        debugLogging: this.config.debugLogging,
-      });
-
-      const wallet = await lnbitsClient.getWalletInfo();
-
-      return {
-        ok: true,
-        rail: "LN",
-        backendStatus: `connected (${wallet.name})`,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      return {
-        ok: false,
-        rail: "LN",
-        error: `LNbits unreachable: ${message}`,
-        backendStatus: "unreachable",
-      };
-    }
+    // TODO: Implement actual LNbits health check (Step 2)
+    return {
+      ok: false,
+      rail: "LN",
+      error: "LNbits health check not yet implemented",
+      backendStatus: "not_implemented",
+    };
   }
 
   /**
