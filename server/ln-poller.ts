@@ -131,8 +131,14 @@ export class LNPoller {
 
       // Check each pending invoice
       for (const invoice of pendingInvoices) {
-        // Skip invoices where address generation failed (no payment hash stored)
-        if (!invoice.lnPaymentHash) {
+        // Skip invoices where address generation failed (no payment hash stored).
+        // Also guard against string "null" — can occur if the field was serialized
+        // incorrectly when the original LNbits call failed.
+        const isInvalidHash =
+          !invoice.lnPaymentHash ||
+          invoice.lnPaymentHash === "null" ||
+          invoice.lnPaymentHash === "undefined";
+        if (isInvalidHash) {
           console.warn(`LN poller: skipping invoice ${invoice.id} — no payment hash (address generation failed, marking failed)`);
           try {
             await storage.updateInvoiceStatus(invoice.id, "failed");
