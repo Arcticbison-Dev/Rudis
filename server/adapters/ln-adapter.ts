@@ -403,8 +403,9 @@ export class LnAdapter implements RailAdapter {
         },
       };
     } catch (error) {
-      // Log creation failure
+      // Log creation failure with full error for diagnostics
       const errorMsg = error instanceof Error ? error.message : "Unknown error";
+      console.error(`[LN] createInvoice failed for invoice ${request.invoiceId}:`, errorMsg);
       logPaymentCreateFailed("LN", request.invoiceId, "ln_api_error", errorMsg);
 
       // Re-throw for caller to handle

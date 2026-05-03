@@ -131,9 +131,19 @@ export class LNPoller {
 
       // Check each pending invoice
       for (const invoice of pendingInvoices) {
+        // Skip invoices where address generation failed (no payment hash stored)
+        if (!invoice.lnPaymentHash) {
+          console.warn(`LN poller: skipping invoice ${invoice.id} — no payment hash (address generation failed, marking failed)`);
+          try {
+            await storage.updateInvoiceStatus(invoice.id, "failed");
+          } catch { /* best-effort */ }
+          failureCount++;
+          continue;
+        }
+
         try {
           // Call LNbits API to get payment status
-          const payment = await lnbitsClient.getPaymentStatus(invoice.lnPaymentHash!);
+          const payment = await lnbitsClient.getPaymentStatus(invoice.lnPaymentHash);
 
           // Use shared payment confirmation handler (same logic as webhook)
           const confirmed = await confirmLightningPayment(payment, "polling");
