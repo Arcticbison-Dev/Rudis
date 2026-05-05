@@ -2637,6 +2637,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  /**
+   * GET /admin/node/funding-address
+   * Returns a Bitcoin on-chain funding address from phoenixd.
+   * Proxies to the internal phoenixd service — keeps phoenixd off the public internet.
+   * Protected by ADMIN_API_TOKEN.
+   */
+  app.get("/admin/node/funding-address", adminApiLimiter, authenticateAdminApi, async (req, res) => {
+    const phoenixdUrl = process.env.PHOENIXD_API_ENDPOINT || "http://phoenixd.railway.internal:9740";
+    const phoenixdPassword = process.env.PHOENIXD_API_PASSWORD || "";
+
+    if (!phoenixdPassword) {
+      return res.status(503).json({ error: "PHOENIXD_API_PASSWORD not configured" });
+    }
+
+    try {
+      const credentials = Buffer.from(`:${phoenixdPassword}`).toString("base64");
+      const response = await fetch(`${phoenixdUrl}/getfundingaddress`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Basic ${credentials}`,
+        },
+      });
+
+      if (!response.ok) {
+        return res.status(502).json({ error: `phoenixd returned ${response.status}` });
+      }
+
+      const data = await response.json() as any;
+      return res.json({ address: data.address, message: "Send BTC to this address to fund your Lightning node." });
+    } catch (error: any) {
+      return res.status(502).json({ error: "Failed to reach phoenixd", detail: error.message });
+    }
+  });
+
   const httpServer = createServer(app);
 
   return httpServer;
