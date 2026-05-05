@@ -2679,15 +2679,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     };
 
-    // Ordered list of candidates — GET variants first, then POST fallbacks
+    // Ordered list of candidates — covers known phoenixd naming across versions
     const candidates: Array<{ path: string; method?: string }> = [
+      // lowercase (old style)
       { path: "/getfundingaddress" },
       { path: "/getfundingaddress", method: "POST" },
       { path: "/getswapinaddress" },
+      { path: "/getswapinaddress", method: "POST" },
+      // camelCase (Ktor is case-sensitive, v0.6+ may use camelCase)
+      { path: "/getFundingAddress" },
+      { path: "/getSwapInAddress" },
+      { path: "/getSwapinAddress" },
+      // REST-style paths
       { path: "/swap-in/address" },
+      { path: "/swap-in" },
+      { path: "/swapIn" },
+      { path: "/swapIn/address" },
       { path: "/swapin/address" },
       { path: "/funding/address" },
+      { path: "/funding" },
+      { path: "/onchain/address" },
+      { path: "/bitcoin/address" },
+      { path: "/wallet/address" },
       { path: "/getnewaddress" },
+      // probe root + api index for hints
+      { path: "/" },
+      { path: "/api" },
+      { path: "/swagger" },
+      { path: "/openapi.json" },
+      // other known phoenixd endpoints (to confirm connectivity / routing)
+      { path: "/getbalance" },
+      { path: "/listchannels" },
     ];
 
     for (const { path, method } of candidates) {
