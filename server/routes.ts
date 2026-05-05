@@ -1619,11 +1619,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const payment = await orchestrator.createPayment(currency, paymentRequest);
 
-        // Update invoice with real payment address
+        // Update invoice with real payment address + LN-specific metadata
+        // Lightning requires paymentHash and checkingId for poller to track payment
+        const lnUpdates: Partial<typeof invoice> = {};
+        if (currency === "LN" && payment.metadata) {
+          if (!payment.metadata.paymentHash || !payment.metadata.checkingId) {
+            throw new Error("Lightning adapter must return paymentHash and checkingId in metadata");
+          }
+          (lnUpdates as any).lnPaymentHash = payment.metadata.paymentHash as string;
+          (lnUpdates as any).lnCheckingId = payment.metadata.checkingId as string;
+          (lnUpdates as any).bolt11Invoice = payment.paymentAddress;
+          (lnUpdates as any).railType = "ln";
+        }
+
         await storage.updateInvoice(invoice.id, {
           paymentAddress: payment.paymentAddress,
+          ...lnUpdates,
         });
         invoice.paymentAddress = payment.paymentAddress;
+        Object.assign(invoice, lnUpdates);
         
         console.log(JSON.stringify({
           invoiceId: invoice.id,
