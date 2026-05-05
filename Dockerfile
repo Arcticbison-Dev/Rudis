@@ -23,6 +23,7 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/client/public ./client/public
 COPY --from=builder /app/shared ./shared
 COPY --from=builder /app/migrations ./migrations
+COPY --from=builder /app/drizzle.config.ts ./
 
 USER payments
 
