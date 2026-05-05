@@ -2653,7 +2653,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     try {
       const credentials = Buffer.from(`:${phoenixdPassword}`).toString("base64");
-      const response = await fetch(`${phoenixdUrl}/getfundingaddress`, {
+      const response = await fetch(`${phoenixdUrl}/getinfo`, {
         method: "GET",
         headers: {
           "Authorization": `Basic ${credentials}`,
