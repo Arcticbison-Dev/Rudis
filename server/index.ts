@@ -51,8 +51,8 @@ function startRailServices() {
     railXmrProcess = spawnRailProcess("rail-xmr", railXmrPath, path.resolve(process.cwd(), "rail-xmr"), {
       PORT: "5003",
       PAYMENTS_SERVICE_URL: "http://localhost:5000",
-      XMR_DEV_MODE: process.env.XMR_DEV_MODE || "true",
-      XMR_NETWORK: process.env.XMR_NETWORK || "stagenet",
+      XMR_DEV_MODE: process.env.XMR_DEV_MODE || "false",
+      XMR_NETWORK: process.env.XMR_NETWORK || "mainnet",
     });
     railXmrProcess.on("exit", (code) => {
       log(`[rail-xmr] Process exited with code ${code}`);
