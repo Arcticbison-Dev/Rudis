@@ -2668,8 +2668,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           opts.body = "";
         }
         const r = await fetch(`${phoenixdUrl}${path}`, opts);
+        // Read body as text first to avoid "body already read" errors,
+        // then try to parse as JSON
+        const text = await r.text();
         let body: any;
-        try { body = await r.json(); } catch { body = await r.text(); }
+        try { body = JSON.parse(text); } catch { body = text; }
         return { ok: r.ok, status: r.status, body };
       } catch (e: any) {
         return { ok: false, status: 0, body: e.message };
