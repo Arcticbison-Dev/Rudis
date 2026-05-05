@@ -2639,126 +2639,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   /**
    * GET /admin/node/funding-address
-   * Returns a Bitcoin on-chain funding address from phoenixd.
-   * Proxies to the internal phoenixd service — keeps phoenixd off the public internet.
+   * Returns node info including current balance and channel status.
+   * phoenixd v0.6+ removed static swap-in addresses. The correct way to fund
+   * the node is via Lightning invoice (see POST /admin/node/funding-invoice).
    * Protected by ADMIN_API_TOKEN.
-   *
-   * Probes known endpoint variants across phoenixd versions so we can identify
-   * the correct path without trial-and-error deploys.
    */
   app.get("/admin/node/funding-address", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     const phoenixdUrl = process.env.PHOENIXD_API_ENDPOINT || "http://phoenixd.railway.internal:9740";
     const phoenixdPassword = process.env.PHOENIXD_API_PASSWORD || "";
-
     if (!phoenixdPassword) {
       return res.status(503).json({ error: "PHOENIXD_API_PASSWORD not configured" });
     }
-
     const credentials = Buffer.from(`:${phoenixdPassword}`).toString("base64");
-    const authHeaders = {
-      "Authorization": `Basic ${credentials}`,
-    };
-
-    // Helper: attempt a single phoenixd endpoint
-    const probe = async (path: string, method = "GET"): Promise<{ ok: boolean; status: number; body: any }> => {
-      try {
-        const opts: RequestInit = { method, headers: { ...authHeaders } };
-        if (method === "POST") {
-          (opts.headers as any)["Content-Type"] = "application/x-www-form-urlencoded";
-          opts.body = "";
-        }
-        const r = await fetch(`${phoenixdUrl}${path}`, opts);
-        // Read body as text first to avoid "body already read" errors,
-        // then try to parse as JSON
-        const text = await r.text();
-        let body: any;
-        try { body = JSON.parse(text); } catch { body = text; }
-        return { ok: r.ok, status: r.status, body };
-      } catch (e: any) {
-        return { ok: false, status: 0, body: e.message };
-      }
-    };
-
-    // Run ALL candidates and collect results.
-    // - 200 with address field → success, return immediately
-    // - 200 without address / 400 / 405 → endpoint EXISTS, collect for inspection
-    // - 404 "Unknown endpoint" → skip (path doesn't exist)
-    const candidates: Array<{ path: string; method?: string }> = [
-      // lowercase
-      { path: "/getfundingaddress" },
-      { path: "/getfundingaddress", method: "POST" },
-      { path: "/getswapinaddress" },
-      { path: "/getswapinaddress", method: "POST" },
-      // camelCase (Ktor is case-sensitive)
-      { path: "/getFundingAddress" },
-      { path: "/getSwapInAddress" },
-      { path: "/getSwapinAddress" },
-      { path: "/getSwapAddress" },
-      // REST paths
-      { path: "/swap-in" },
-      { path: "/swap-in/address" },
-      { path: "/swap-in/address", method: "POST" },
-      { path: "/swapIn" },
-      { path: "/swapIn/address" },
-      { path: "/swapin/address" },
-      { path: "/funding/address" },
-      { path: "/funding" },
-      { path: "/onchain" },
-      { path: "/onchain/address" },
-      { path: "/bitcoin/address" },
-      { path: "/wallet/address" },
-      { path: "/getnewaddress" },
-      { path: "/getaddress" },
-      { path: "/bitcoinaddress" },
-      { path: "/address" },
-      // POST variants for sendtoaddress (confirm address-related endpoints exist)
-      { path: "/sendtoaddress", method: "POST" },
-      // index / docs
-      { path: "/" },
-      { path: "/openapi.json" },
-      // confirmed-working endpoints (sanity)
-      { path: "/getbalance" },
-      { path: "/listchannels" },
-    ];
-
-    const found: Record<string, any> = {};   // non-404 hits
-    const missed: Record<string, any> = {};  // 404s
-
-    for (const { path, method } of candidates) {
-      const result = await probe(path, method);
-      const key = `${method || "GET"} ${path}`;
-
-      if (result.ok) {
-        const data = result.body;
-        const address =
-          typeof data === "object"
-            ? data.address || data.bitcoinAddress || data.swapInAddress ||
-              data.fundingAddress || data.swapAddress
-            : null;
-        if (address) {
-          // Found it — return immediately
-          return res.json({
-            address,
-            message: "Send BTC to this address to fund your Lightning node.",
-            raw: data,
-            _resolvedVia: key,
-          });
-        }
-        found[key] = { status: result.status, body: result.body };
-      } else if (result.status !== 404) {
-        // 400, 405, 500, etc — endpoint exists but needs different usage
-        found[key] = { status: result.status, body: result.body };
-      } else {
-        missed[key] = result.status;
-      }
+    try {
+      const [infoRes, balRes, chanRes] = await Promise.all([
+        fetch(`${phoenixdUrl}/getinfo`, { headers: { Authorization: `Basic ${credentials}` } }),
+        fetch(`${phoenixdUrl}/getbalance`, { headers: { Authorization: `Basic ${credentials}` } }),
+        fetch(`${phoenixdUrl}/listchannels`, { headers: { Authorization: `Basic ${credentials}` } }),
+      ]);
+      const [info, balance, channels] = await Promise.all([
+        infoRes.json(),
+        balRes.json(),
+        chanRes.json(),
+      ]);
+      return res.json({
+        nodeId: (info as any).nodeId,
+        version: (info as any).version,
+        chain: (info as any).chain,
+        blockHeight: (info as any).blockHeight,
+        balanceSat: (balance as any).balanceSat,
+        feeCreditSat: (balance as any).feeCreditSat,
+        channels: (channels as any[]).length,
+        fundingNote: "phoenixd v0.6+ does not expose a static on-chain deposit address. " +
+          "Fund via Lightning: POST /admin/node/funding-invoice with { amountSat, description }. " +
+          "Pay the invoice from an exchange (Coinbase, Kraken, etc.) that supports Lightning withdrawals. " +
+          "ACINQ's LSP will automatically open a channel on first incoming payment.",
+      });
+    } catch (error: any) {
+      return res.status(502).json({ error: "Failed to reach phoenixd", detail: error.message });
     }
+  });
 
-    // No address found — return all non-404 hits for inspection
-    return res.status(502).json({
-      error: "No funding address endpoint found. See 'found' for non-404 hits.",
-      found,   // endpoints that exist (need inspection)
-      missed,  // 404s (paths don't exist)
-    });
+  /**
+   * POST /admin/node/funding-invoice
+   * Creates a Lightning invoice to fund the phoenixd node.
+   * Pay this invoice from any Lightning-enabled exchange (Coinbase, Kraken, etc.).
+   * On first payment, ACINQ's LSP automatically opens a channel.
+   * Body: { amountSat: number, description?: string }
+   * Protected by ADMIN_API_TOKEN.
+   */
+  app.post("/admin/node/funding-invoice", adminApiLimiter, authenticateAdminApi, async (req, res) => {
+    const phoenixdUrl = process.env.PHOENIXD_API_ENDPOINT || "http://phoenixd.railway.internal:9740";
+    const phoenixdPassword = process.env.PHOENIXD_API_PASSWORD || "";
+    if (!phoenixdPassword) {
+      return res.status(503).json({ error: "PHOENIXD_API_PASSWORD not configured" });
+    }
+    const { amountSat, description = "Fund phoenixd Lightning node" } = req.body as { amountSat?: number; description?: string };
+    if (!amountSat || typeof amountSat !== "number" || amountSat < 1) {
+      return res.status(400).json({ error: "amountSat is required and must be a positive integer" });
+    }
+    const credentials = Buffer.from(`:${phoenixdPassword}`).toString("base64");
+    try {
+      const params = new URLSearchParams({ amountSat: String(amountSat), description });
+      const response = await fetch(`${phoenixdUrl}/createinvoice`, {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${credentials}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: params.toString(),
+      });
+      const text = await response.text();
+      let data: any;
+      try { data = JSON.parse(text); } catch { data = text; }
+      if (!response.ok) {
+        return res.status(502).json({ error: `phoenixd returned ${response.status}`, body: data });
+      }
+      return res.json({
+        invoice: data.serialized || data.invoice || data,
+        amountSat,
+        description,
+        message: "Pay this Lightning invoice from an exchange that supports Lightning withdrawals (Coinbase, Kraken, Bitfinex, etc.). ACINQ will automatically open a channel on receipt.",
+        raw: data,
+      });
+    } catch (error: any) {
+      return res.status(502).json({ error: "Failed to reach phoenixd", detail: error.message });
+    }
   });
 
   const httpServer = createServer(app);
