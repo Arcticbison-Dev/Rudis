@@ -2679,74 +2679,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     };
 
-    // Ordered list of candidates — covers known phoenixd naming across versions
+    // Run ALL candidates and collect results.
+    // - 200 with address field → success, return immediately
+    // - 200 without address / 400 / 405 → endpoint EXISTS, collect for inspection
+    // - 404 "Unknown endpoint" → skip (path doesn't exist)
     const candidates: Array<{ path: string; method?: string }> = [
-      // lowercase (old style)
+      // lowercase
       { path: "/getfundingaddress" },
       { path: "/getfundingaddress", method: "POST" },
       { path: "/getswapinaddress" },
       { path: "/getswapinaddress", method: "POST" },
-      // camelCase (Ktor is case-sensitive, v0.6+ may use camelCase)
+      // camelCase (Ktor is case-sensitive)
       { path: "/getFundingAddress" },
       { path: "/getSwapInAddress" },
       { path: "/getSwapinAddress" },
-      // REST-style paths
-      { path: "/swap-in/address" },
+      { path: "/getSwapAddress" },
+      // REST paths
       { path: "/swap-in" },
+      { path: "/swap-in/address" },
+      { path: "/swap-in/address", method: "POST" },
       { path: "/swapIn" },
       { path: "/swapIn/address" },
       { path: "/swapin/address" },
       { path: "/funding/address" },
       { path: "/funding" },
+      { path: "/onchain" },
       { path: "/onchain/address" },
       { path: "/bitcoin/address" },
       { path: "/wallet/address" },
       { path: "/getnewaddress" },
-      // probe root + api index for hints
+      { path: "/getaddress" },
+      { path: "/bitcoinaddress" },
+      { path: "/address" },
+      // POST variants for sendtoaddress (confirm address-related endpoints exist)
+      { path: "/sendtoaddress", method: "POST" },
+      // index / docs
       { path: "/" },
-      { path: "/api" },
-      { path: "/swagger" },
       { path: "/openapi.json" },
-      // other known phoenixd endpoints (to confirm connectivity / routing)
+      // confirmed-working endpoints (sanity)
       { path: "/getbalance" },
       { path: "/listchannels" },
     ];
 
+    const found: Record<string, any> = {};   // non-404 hits
+    const missed: Record<string, any> = {};  // 404s
+
     for (const { path, method } of candidates) {
       const result = await probe(path, method);
+      const key = `${method || "GET"} ${path}`;
+
       if (result.ok) {
         const data = result.body;
         const address =
           typeof data === "object"
-            ? data.address || data.bitcoinAddress || data.swapInAddress || data.fundingAddress
+            ? data.address || data.bitcoinAddress || data.swapInAddress ||
+              data.fundingAddress || data.swapAddress
             : null;
         if (address) {
+          // Found it — return immediately
           return res.json({
             address,
             message: "Send BTC to this address to fund your Lightning node.",
             raw: data,
-            _resolvedVia: `${method || "GET"} ${path}`,
+            _resolvedVia: key,
           });
         }
-        // Responded 200 but no recognised address field — return raw so we can inspect
-        return res.json({
-          address: null,
-          raw: data,
-          _resolvedVia: `${method || "GET"} ${path}`,
-          note: "phoenixd responded 200 but no address field found — check raw for structure",
-        });
+        found[key] = { status: result.status, body: result.body };
+      } else if (result.status !== 404) {
+        // 400, 405, 500, etc — endpoint exists but needs different usage
+        found[key] = { status: result.status, body: result.body };
+      } else {
+        missed[key] = result.status;
       }
     }
 
-    // All candidates failed — return diagnostic results
-    const diagnostics: Record<string, any> = {};
-    for (const { path, method } of candidates) {
-      const r = await probe(path, method);
-      diagnostics[`${method || "GET"} ${path}`] = { status: r.status, body: r.body };
-    }
+    // No address found — return all non-404 hits for inspection
     return res.status(502).json({
-      error: "No known phoenixd funding-address endpoint responded successfully",
-      diagnostics,
+      error: "No funding address endpoint found. See 'found' for non-404 hits.",
+      found,   // endpoints that exist (need inspection)
+      missed,  // 404s (paths don't exist)
     });
   });
 
