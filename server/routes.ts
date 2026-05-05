@@ -2642,6 +2642,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
    * Returns a Bitcoin on-chain funding address from phoenixd.
    * Proxies to the internal phoenixd service — keeps phoenixd off the public internet.
    * Protected by ADMIN_API_TOKEN.
+   *
+   * Probes known endpoint variants across phoenixd versions so we can identify
+   * the correct path without trial-and-error deploys.
    */
   app.get("/admin/node/funding-address", adminApiLimiter, authenticateAdminApi, async (req, res) => {
     const phoenixdUrl = process.env.PHOENIXD_API_ENDPOINT || "http://phoenixd.railway.internal:9740";
@@ -2651,27 +2654,75 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.status(503).json({ error: "PHOENIXD_API_PASSWORD not configured" });
     }
 
-    try {
-      const credentials = Buffer.from(`:${phoenixdPassword}`).toString("base64");
-      const response = await fetch(`${phoenixdUrl}/getinfo`, {
-        method: "GET",
-        headers: {
-          "Authorization": `Basic ${credentials}`,
-        },
-      });
+    const credentials = Buffer.from(`:${phoenixdPassword}`).toString("base64");
+    const authHeaders = {
+      "Authorization": `Basic ${credentials}`,
+    };
 
-      if (!response.ok) {
-        const body = await response.text();
-        return res.status(502).json({ error: `phoenixd returned ${response.status}`, body });
+    // Helper: attempt a single phoenixd endpoint
+    const probe = async (path: string, method = "GET"): Promise<{ ok: boolean; status: number; body: any }> => {
+      try {
+        const opts: RequestInit = { method, headers: { ...authHeaders } };
+        if (method === "POST") {
+          (opts.headers as any)["Content-Type"] = "application/x-www-form-urlencoded";
+          opts.body = "";
+        }
+        const r = await fetch(`${phoenixdUrl}${path}`, opts);
+        let body: any;
+        try { body = await r.json(); } catch { body = await r.text(); }
+        return { ok: r.ok, status: r.status, body };
+      } catch (e: any) {
+        return { ok: false, status: 0, body: e.message };
       }
+    };
 
-      const data = await response.json() as any;
-      // phoenixd may return { address } or { bitcoinAddress } depending on version
-      const address = data.address || data.bitcoinAddress || data;
-      return res.json({ address, message: "Send BTC to this address to fund your Lightning node.", raw: data });
-    } catch (error: any) {
-      return res.status(502).json({ error: "Failed to reach phoenixd", detail: error.message });
+    // Ordered list of candidates — GET variants first, then POST fallbacks
+    const candidates: Array<{ path: string; method?: string }> = [
+      { path: "/getfundingaddress" },
+      { path: "/getfundingaddress", method: "POST" },
+      { path: "/getswapinaddress" },
+      { path: "/swap-in/address" },
+      { path: "/swapin/address" },
+      { path: "/funding/address" },
+      { path: "/getnewaddress" },
+    ];
+
+    for (const { path, method } of candidates) {
+      const result = await probe(path, method);
+      if (result.ok) {
+        const data = result.body;
+        const address =
+          typeof data === "object"
+            ? data.address || data.bitcoinAddress || data.swapInAddress || data.fundingAddress
+            : null;
+        if (address) {
+          return res.json({
+            address,
+            message: "Send BTC to this address to fund your Lightning node.",
+            raw: data,
+            _resolvedVia: `${method || "GET"} ${path}`,
+          });
+        }
+        // Responded 200 but no recognised address field — return raw so we can inspect
+        return res.json({
+          address: null,
+          raw: data,
+          _resolvedVia: `${method || "GET"} ${path}`,
+          note: "phoenixd responded 200 but no address field found — check raw for structure",
+        });
+      }
     }
+
+    // All candidates failed — return diagnostic results
+    const diagnostics: Record<string, any> = {};
+    for (const { path, method } of candidates) {
+      const r = await probe(path, method);
+      diagnostics[`${method || "GET"} ${path}`] = { status: r.status, body: r.body };
+    }
+    return res.status(502).json({
+      error: "No known phoenixd funding-address endpoint responded successfully",
+      diagnostics,
+    });
   });
 
   const httpServer = createServer(app);
