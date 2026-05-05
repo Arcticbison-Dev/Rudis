@@ -2661,11 +2661,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       if (!response.ok) {
-        return res.status(502).json({ error: `phoenixd returned ${response.status}` });
+        const body = await response.text();
+        return res.status(502).json({ error: `phoenixd returned ${response.status}`, body });
       }
 
       const data = await response.json() as any;
-      return res.json({ address: data.address, message: "Send BTC to this address to fund your Lightning node." });
+      // phoenixd may return { address } or { bitcoinAddress } depending on version
+      const address = data.address || data.bitcoinAddress || data;
+      return res.json({ address, message: "Send BTC to this address to fund your Lightning node.", raw: data });
     } catch (error: any) {
       return res.status(502).json({ error: "Failed to reach phoenixd", detail: error.message });
     }
