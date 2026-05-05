@@ -158,11 +158,37 @@ export class LNbitsClient {
    */
   async getPaymentStatus(paymentHash: string): Promise<LNbitsPayment> {
     try {
-      const response = await this.client.get<LNbitsPayment>(
+      const response = await this.client.get<any>(
         `/api/v1/payments/${paymentHash}`
       );
 
-      return response.data;
+      const data = response.data;
+
+      // LNbits v1.5.x returns { paid, preimage, details: { checking_id, payment_hash, amount, ... } }
+      // Earlier versions returned a flat object with { checking_id, pending, amount, ... }
+      // Normalize both formats to the flat LNbitsPayment shape.
+      if (data && typeof data === "object" && "details" in data) {
+        const d = data.details;
+        return {
+          checking_id: d.checking_id,
+          pending: !data.paid,
+          amount: d.amount,
+          fee: d.fee ?? 0,
+          memo: d.memo ?? "",
+          time: d.created_at ? Math.floor(new Date(d.created_at).getTime() / 1000) : 0,
+          bolt11: d.bolt11 ?? d.payment_request ?? "",
+          preimage: data.preimage ?? d.preimage ?? null,
+          payment_hash: d.payment_hash,
+          expiry: null,
+          extra: d.extra ?? {},
+          wallet_id: d.wallet_id ?? "",
+          webhook: d.webhook ?? null,
+          webhook_status: d.webhook_status ?? null,
+        };
+      }
+
+      // Flat format (older LNbits versions)
+      return data as LNbitsPayment;
     } catch (error) {
       this.handleError(error, "getPaymentStatus", { paymentHash });
       throw error;
