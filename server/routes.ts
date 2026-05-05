@@ -1604,76 +1604,68 @@ export async function registerRoutes(app: Express): Promise<Server> {
         };
       }
 
-      // Create invoice first (will have placeholder address)
-      const invoice = await storage.createInvoice({
-        ...validatedData,
-        ...(feeData.feePolicyId ? feeData : {}),
-      } as any);
-      
-      // Get payment address from orchestrator
+      // Generate invoice ID upfront so orchestrator can reference it
+      const invoiceId = crypto.randomUUID();
+
+      // Get payment address from orchestrator FIRST (atomic: all data before DB write)
+      let payment;
       try {
-        const paymentRequest = {
-          invoiceId: invoice.id,
-          amountAtomic: invoice.amount,
-        };
-
-        const payment = await orchestrator.createPayment(currency, paymentRequest);
-
-        // Update invoice with real payment address + LN-specific metadata
-        // Lightning requires paymentHash and checkingId for poller to track payment
-        const lnUpdates: Partial<typeof invoice> = {};
-        if (currency === "LN" && payment.metadata) {
-          if (!payment.metadata.paymentHash || !payment.metadata.checkingId) {
-            throw new Error("Lightning adapter must return paymentHash and checkingId in metadata");
-          }
-          (lnUpdates as any).lnPaymentHash = payment.metadata.paymentHash as string;
-          (lnUpdates as any).lnCheckingId = payment.metadata.checkingId as string;
-          (lnUpdates as any).bolt11Invoice = payment.paymentAddress;
-          (lnUpdates as any).railType = "ln";
-        }
-
-        await storage.updateInvoice(invoice.id, {
-          paymentAddress: payment.paymentAddress,
-          ...lnUpdates,
+        payment = await orchestrator.createPayment(currency, {
+          invoiceId,
+          amountAtomic: validatedData.amount,
         });
-        invoice.paymentAddress = payment.paymentAddress;
-        Object.assign(invoice, lnUpdates);
-        
-        console.log(JSON.stringify({
-          invoiceId: invoice.id,
-          rail: currency.toLowerCase(),
-          event: "address_created"
-        }));
       } catch (error: any) {
-        // Handle orchestrator errors
         if (error.code === "RAIL_UNAVAILABLE") {
-          // Log internally but don't expose details to client
           console.error({
             event: "rail_unavailable",
             currency,
-            invoiceId: invoice.id,
+            invoiceId,
             error: error.message,
           });
-          
-          return res.status(503).json({ 
+          return res.status(503).json({
             error: "rail_unavailable",
-            message: `Payment rail ${currency} is temporarily unavailable`
+            message: `Payment rail ${currency} is temporarily unavailable`,
           });
         }
-        
-        // Silent error - address derivation failed (log internally, generic to client)
         console.error({
           event: "address_generation_failed",
           currency,
-          invoiceId: invoice.id,
+          invoiceId,
           error: error.message,
         });
-        
-        return res.status(500).json({ 
+        return res.status(500).json({
           error: "address_generation_failed",
-          message: "Failed to generate payment address"
+          message: "Failed to generate payment address",
         });
       }
+
+      // Extract LN-specific metadata BEFORE DB write
+      // paymentHash + checkingId are required for the poller to track payment status
+      const lnData: Record<string, string> = {};
+      if (currency === "LN") {
+        if (!payment.metadata?.paymentHash || !payment.metadata?.checkingId) {
+          throw new Error("Lightning adapter must return paymentHash and checkingId in metadata");
+        }
+        lnData.lnPaymentHash = payment.metadata.paymentHash as string;
+        lnData.lnCheckingId = payment.metadata.checkingId as string;
+        lnData.bolt11Invoice = payment.paymentAddress;
+        lnData.railType = "ln";
+      }
+
+      // Create invoice with ALL data in one atomic DB write (no placeholder + update)
+      const invoice = await storage.createInvoice({
+        ...validatedData,
+        paymentAddress: payment.paymentAddress,
+        ...lnData,
+        ...(feeData.feePolicyId ? feeData : {}),
+      } as any);
+
+      console.log(JSON.stringify({
+        invoiceId: invoice.id,
+        rail: currency.toLowerCase(),
+        event: "invoice_created",
+        hasLnHash: !!lnData.lnPaymentHash,
+      }));
       
       console.log(JSON.stringify({
         invoiceId: invoice.id,
