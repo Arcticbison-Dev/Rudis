@@ -1788,12 +1788,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (rudisWebhookUrl) {
           const webhookPayload = {
             invoiceId: invoice.id,
-            status: "confirmed",
+            status: "paid",
             amount: invoice.amount,
             currency: invoice.currency,
             timestamp: new Date().toISOString(),
           };
-          
+
           await queueWebhook(invoice.id, rudisWebhookUrl, webhookPayload);
         }
         
@@ -1862,12 +1862,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
-          status: "confirmed",
+          status: "paid",
           amount: updatedInvoice!.amount,
           currency: updatedInvoice!.currency,
           timestamp: new Date().toISOString(),
         };
-        
+
         await queueWebhook(invoiceId, rudisWebhookUrl, payload);
       }
 
@@ -1927,12 +1927,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
-          status: "confirmed",
+          status: "paid",
           amount: updatedInvoice!.amount,
           currency: updatedInvoice!.currency,
           timestamp: new Date().toISOString(),
         };
-        
+
         await queueWebhook(invoiceId, rudisWebhookUrl, payload);
       }
 
@@ -1992,12 +1992,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const updatedInvoice = await storage.getInvoice(invoiceId);
         const payload = {
           invoiceId: updatedInvoice!.id,
-          status: "confirmed",
+          status: "paid",
           amount: updatedInvoice!.amount,
           currency: updatedInvoice!.currency,
           timestamp: new Date().toISOString(),
         };
-        
+
         await queueWebhook(invoiceId, rudisWebhookUrl, payload);
       }
 
@@ -2071,7 +2071,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (rudisWebhookUrl && updatedInvoice) {
         const webhookPayload = {
           invoiceId: updatedInvoice.id,
-          status: updatedInvoice.status,
+          status: "paid",
           amount: updatedInvoice.amount,
           currency: updatedInvoice.currency,
           timestamp: new Date().toISOString(),
