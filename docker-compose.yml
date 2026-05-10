@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: altostratus-payments
+    container_name: rudis
     ports:
       - "${PAYMENTS_PORT:-5000}:5000"
     environment:
@@ -61,7 +61,7 @@ services:
     build:
       context: ./rail-btc
       dockerfile: Dockerfile
-    container_name: altostratus-rail-btc
+    container_name: rudis-rail-btc
     ports:
       - "${BTC_RAIL_PORT:-5002}:5002"
     environment:
@@ -97,7 +97,7 @@ services:
     build:
       context: ./rail-xmr
       dockerfile: Dockerfile
-    container_name: altostratus-rail-xmr
+    container_name: rudis-rail-xmr
     ports:
       - "${XMR_RAIL_PORT:-5003}:5003"
     environment:
@@ -133,7 +133,7 @@ services:
 
   postgres:
     image: postgres:15-alpine
-    container_name: altostratus-postgres
+    container_name: rudis-postgres
     environment:
       - POSTGRES_USER=${PGUSER:-payments}
       - POSTGRES_PASSWORD=${PGPASSWORD}

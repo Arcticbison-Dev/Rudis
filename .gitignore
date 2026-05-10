@@ -9,3 +9,8 @@ vite.config.ts.*
 .env
 .env.local
 *.env
+
+# Internal / workspace files (not relevant for open-source users)
+replit.md
+PRODUCTION-PLAN.md
+attached_assets/

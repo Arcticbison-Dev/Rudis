@@ -1,53 +1,71 @@
-# Altostratus Payments
+# Rudis
 
-A privacy-focused, self-hosted crypto payment invoice system supporting Bitcoin (on-chain), Lightning Network, and Monero. Non-custodial, no KYC, no third-party tracking.
+**Self-hosted, non-custodial crypto payment invoicing.** Accept Bitcoin, Lightning Network, and Monero — no KYC, no third-party custody, no tracking.
 
-## Features
+> Built by [Arctic Bison LLC](https://arcticbison.com). MIT licensed.
 
-- **Multi-rail payments**: Bitcoin on-chain, Lightning Network (via LNbits), and Monero
-- **Non-custodial**: Your keys, your coins. Payment addresses derived from your xpub/wallet
-- **Privacy-first**: No third-party services, no tracking, automatic data anonymization
-- **Invoice management**: Create, track, and expire invoices with QR codes
-- **Service fee model**: Configurable percentage/fixed fees with min/max caps for licensing
-- **Multi-tenant**: Optional merchant-specific fee policies
-- **Real-time monitoring**: Health checks, metrics, and alerting
-- **Webhook notifications**: HMAC-signed callbacks on payment confirmation
-- **Admin dashboard**: Protected endpoints for invoice management and fee reporting
-- **Template system**: Reusable invoice templates for subscription plans
-- **Docker-ready**: Full containerized deployment with docker-compose
+---
 
-## Quick Start
+## What it does
+
+Rudis is a standalone payment service you run on your own infrastructure. You point it at your wallets (xpub for Bitcoin, LNbits for Lightning, monero-wallet-rpc for Monero), and it handles invoice creation, QR codes, payment monitoring, webhook delivery, and data retention — without ever holding your keys.
+
+**Payment rails:**
+
+| Rail | Currency | Settlement | Custody |
+|------|----------|------------|---------|
+| Lightning Network | BTC (sats) | Instant | Your LNbits node |
+| Bitcoin on-chain | BTC | ~60 min (6 conf) | Your xpub |
+| Monero | XMR | ~20 min (10 conf) | Your wallet RPC |
+
+**Key features:**
+- Non-custodial — keys never leave your infrastructure
+- Privacy-first — no PII collection, unique addresses per invoice, auto-anonymization
+- Multi-tenant fee model — configurable per-merchant fee policies with automatic collection
+- Webhook notifications — HMAC-signed callbacks on payment confirmation
+- Invoice templates — reusable templates for subscription plans
+- Admin dashboard — invoice management, fee reporting, settlements
+- Docker-ready — spin up with a single `docker-compose up`
+
+---
+
+## Quick start
 
 ```bash
-# Clone the repository
-git clone <repo-url> && cd altostratus-payments
+git clone https://github.com/Arcticbison-Dev/CryptoInvoiceNotifier
+cd CryptoInvoiceNotifier
 
-# Run setup (generates secrets, installs deps, pushes DB schema)
+# Generate secrets and install dependencies
 ./setup.sh
 
-# Configure your .env file
-# At minimum: DATABASE_URL and at least one payment rail
+# Edit .env — at minimum: DATABASE_URL and one payment rail
+cp .env.example .env
+$EDITOR .env
 
-# Start the application
-npm run dev
+# Start (Lightning only by default)
+docker-compose up -d
 ```
 
-## Configuration
+See [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) for a complete walkthrough including Lightning (LNbits), Bitcoin xpub, and Monero wallet RPC setup.
 
-Copy `.env.example` to `.env` and configure:
+---
+
+## Configuration
 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `ADMIN_API_TOKEN` | Yes | Protects admin API endpoints and admin UI |
-| `RAIL_AUTH_TOKEN` | Yes | Authenticates rail service callbacks |
+| `ADMIN_API_TOKEN` | Yes | Protects admin API and dashboard |
+| `RAIL_AUTH_TOKEN` | Yes | Authenticates payment rail callbacks |
 | `SESSION_SECRET` | Yes | Express session signing key |
-| `INVOICE_API_KEY` | No | When set, requires Bearer auth on invoice creation |
-| `ENABLE_LN` | No | Enable Lightning Network payments |
-| `ENABLE_BTC` | No | Enable Bitcoin on-chain payments |
-| `ENABLE_XMR` | No | Enable Monero payments |
+| `ENABLE_LN` | No | Enable Lightning Network (requires LNbits) |
+| `ENABLE_BTC` | No | Enable Bitcoin on-chain (requires xpub) |
+| `ENABLE_XMR` | No | Enable Monero (requires wallet RPC) |
+| `INVOICE_API_KEY` | No | Require Bearer auth on invoice creation |
 
-See `.env.example` for the complete list with defaults and descriptions.
+See [.env.example](.env.example) for the full list with descriptions and defaults.
+
+---
 
 ## Architecture
 
@@ -56,181 +74,104 @@ Client (React SPA)
   |
 Express API Server (port 5000)
   |
-  +-- /api/invoices      Public invoice CRUD
-  +-- /payments           Rail-agnostic payment API
-  +-- /admin/*            Protected admin endpoints
-  +-- /health, /metrics   Monitoring
+  +-- /api/invoices      Invoice CRUD (public, rate-limited)
+  +-- /payments          Rail-agnostic payment callback API
+  +-- /admin/*           Protected admin endpoints
+  +-- /health, /metrics  Observability
   |
-  +-- rail-btc/           Bitcoin on-chain listener
-  +-- rail-ln/            Lightning Network (LNbits)
-  +-- rail-xmr/           Monero listener
+  +-- rail-btc/          Bitcoin on-chain listener (optional)
+  +-- rail-ln/           Lightning Network via LNbits (optional)
+  +-- rail-xmr/          Monero wallet RPC listener (optional)
   |
 PostgreSQL (Drizzle ORM)
 ```
 
-**Key design decisions:**
-- Payment rails are isolated services communicating via authenticated callbacks
-- Fee computation uses BigInt arithmetic for precision (no floating point)
-- Invoices auto-expire and paid invoices auto-anonymize after configurable retention periods
-- All secrets are separated (ADMIN_API_TOKEN, RAIL_AUTH_TOKEN, webhook secrets)
+Payment rails are isolated services that communicate back to the main service via authenticated callbacks. Each rail can be enabled or disabled independently.
 
-## API Overview
+---
+
+## API
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/api/invoices` | GET | None | List invoices |
-| `/api/invoices` | POST | Rate-limited + optional INVOICE_API_KEY | Create invoice |
-| `/api/invoices/:id` | GET | None | Get invoice detail |
-| `/api/templates` | CRUD | None | Manage invoice templates |
-| `/payments` | POST | RAIL_AUTH_TOKEN | Create payment (rail-agnostic) |
-| `/admin/invoices` | GET | ADMIN_API_TOKEN | List all invoices (admin) |
-| `/admin/fee-policies` | CRUD | ADMIN_API_TOKEN | Manage fee policies |
-| `/admin/fee-report` | GET | ADMIN_API_TOKEN | Aggregate fee reporting |
-| `/admin/fee-settlements` | GET | ADMIN_API_TOKEN | List fee settlements |
-| `/admin/fee-settlements/:id/mark-paid` | POST | ADMIN_API_TOKEN | Mark settlement as paid |
-| `/api/fee-status` | GET | None | Fee collection status |
-| `/health` | GET | None | System health check |
+| `/api/invoices` | POST | Rate-limited + optional key | Create invoice |
+| `/api/invoices/:id` | GET | None | Invoice detail |
+| `/api/templates` | CRUD | None | Manage templates |
+| `/payments` | POST | `RAIL_AUTH_TOKEN` | Payment callback (rail → service) |
+| `/admin/invoices` | GET | `ADMIN_API_TOKEN` | Admin invoice list |
+| `/admin/fee-policies` | CRUD | `ADMIN_API_TOKEN` | Fee policy management |
+| `/admin/fee-report` | GET | `ADMIN_API_TOKEN` | Aggregate fee report |
+| `/admin/fee-settlements` | GET/POST | `ADMIN_API_TOKEN` | Settlement management |
+| `/health` | GET | None | Health check |
 | `/metrics` | GET | None | Monitoring metrics |
 
-See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for complete API documentation.
+See [docs/API_REFERENCE.md](docs/API_REFERENCE.md) for full API documentation.
+
+---
+
+## Fee model
+
+Rudis includes an optional operator fee model — useful for SaaS deployments where you want to collect a percentage of each payment.
+
+**Lightning (instant forwarding):** Fees are auto-forwarded to your Lightning Address after each payment. Requires `OPERATOR_LN_ADDRESS` and `LNBITS_ADMIN_KEY`.
+
+**BTC / XMR (accumulated settlement):** Fees accumulate per-invoice. Once the total exceeds `FEE_SETTLEMENT_THRESHOLD_SATS` (default: 10,000 sats), a settlement record is created. Overdue settlements block new invoice creation (HTTP 402).
+
+To disable fee collection entirely, simply don't set `OPERATOR_LN_ADDRESS`, `OPERATOR_BTC_ADDRESS`, or `OPERATOR_XMR_ADDRESS`.
+
+---
 
 ## Testing
 
-Tests automatically load environment variables from `.env` (including `ADMIN_API_TOKEN` for admin endpoint tests). Ensure your `.env` is configured before running.
-
 ```bash
-# Run automated test suite (requires running server)
-npm run dev          # Terminal 1
-npx vitest run       # Terminal 2
-
-# Watch mode
-npx vitest
+npm run dev          # Terminal 1 — start the server
+npx vitest run       # Terminal 2 — run test suite (62 tests)
 ```
 
-The test suite (62 tests) covers:
-- **Fee computation** (18 unit tests): percentage, fixed, min/max caps, BigInt precision, XMR piconero scale
-- **Invoice lifecycle** (14 integration tests): create, read, validate, fee attachment, API key auth
-- **Admin endpoints** (13 tests): fee policy CRUD, auth validation, invoice listing, fee reports
-- **Templates and health** (9 tests): template CRUD, health/metrics endpoints
-- **Fee collection** (8 tests): fee status endpoint, settlement auth, mark-paid, forwarding status
+Tests cover fee computation (unit), invoice lifecycle (integration), admin endpoints, templates, health checks, and fee collection. The test suite requires a running server and a configured `.env`.
 
-Note: Invoice creation tests include rate-limit waits (10 req/min limit on the endpoint).
+---
 
 ## Deployment
 
-### Standalone Setup
-
-1. Clone the repo and run `./setup.sh` to generate secrets and push the DB schema
-2. Edit `.env` to configure your `DATABASE_URL` and payment rails
-3. For each enabled rail, configure its required variables:
-   - **Lightning**: `LNBITS_API_URL`, `LNBITS_WALLET_KEY`, `LNBITS_WEBHOOK_SECRET`
-   - **Bitcoin**: `BTC_XPUB` (your extended public key for address derivation)
-   - **Monero**: `XMR_RPC_HOST`, `XMR_RPC_PORT`, `XMR_RPC_USERNAME`, `XMR_RPC_PASSWORD`
-4. Set `ADMIN_API_TOKEN` for admin access and `RAIL_AUTH_TOKEN` for rail service auth
-
-### Docker (recommended for standalone)
+### Docker (recommended)
 
 ```bash
-# Lightning only (simplest)
+# Lightning only
 docker-compose up -d
 
-# With Bitcoin on-chain
+# Lightning + Bitcoin on-chain
 docker-compose --profile btc up -d
 
-# With all rails
+# All rails
 docker-compose --profile btc --profile xmr up -d
 ```
 
-### Admin API
-
-All admin endpoints require the `ADMIN_API_TOKEN` via `Authorization: Bearer <token>` header:
-
-- `GET /admin/invoices` - List invoices with filtering and pagination
-- `GET /admin/invoices/:id` - Invoice detail with payment transactions
-- `GET/POST /admin/fee-policies` - List and create fee policies
-- `PATCH/DELETE /admin/fee-policies/:id` - Update and delete fee policies
-- `GET /admin/fee-report` - Aggregate fee reporting with date range
-- `GET /admin/fee-settlements` - List fee settlements (pending/paid/overdue)
-- `POST /admin/fee-settlements/:id/mark-paid` - Mark settlement as paid
-
-### Database Migrations
+### Manual / Railway / Render
 
 ```bash
-# Generate migration from schema changes
-npx drizzle-kit generate
-
-# Apply migrations
-npx drizzle-kit push
-
-# Or push directly (development)
-npm run db:push
+./setup.sh          # generates secrets, installs deps, runs DB migration
+npm run build
+npm run start
 ```
+
+For production deployments, see [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) and [docs/OPERATIONS_GUIDE.md](docs/OPERATIONS_GUIDE.md).
+
+---
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [API Reference](docs/API_REFERENCE.md) | Complete REST API documentation |
-| [Operations Guide](docs/OPERATIONS_GUIDE.md) | Production ops, backups, secrets rotation |
-| [Standalone Integration](docs/STANDALONE_INTEGRATION_GUIDE.md) | Third-party deployment guide |
+| [Self-Hosting Guide](docs/SELF_HOSTING.md) | Full setup walkthrough — Docker, Lightning, Bitcoin, Monero |
+| [API Reference](docs/API_REFERENCE.md) | Complete REST API docs |
+| [Operations Guide](docs/OPERATIONS_GUIDE.md) | Secrets rotation, backups, production ops |
 | [Observability](docs/OBSERVABILITY.md) | Monitoring, alerting, health checks |
+| [Standalone Integration](docs/STANDALONE_INTEGRATION_GUIDE.md) | Integrating Rudis into your own app |
 
-Historical development documentation is archived in `docs/archive/`.
-
-## Service Fee Model
-
-For licensing/SaaS deployments, configure fee policies via admin API:
-
-```bash
-# Create a fee policy
-curl -X POST http://localhost:5000/admin/fee-policies \
-  -H "Authorization: Bearer $ADMIN_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Standard Fee",
-    "feePercent": "1.0000",
-    "fixedFeeAtomic": "100",
-    "minFeeAtomic": "200",
-    "maxFeeAtomic": "50000",
-    "currency": "BTC",
-    "active": true
-  }'
-
-# View fee report
-curl http://localhost:5000/admin/fee-report \
-  -H "Authorization: Bearer $ADMIN_API_TOKEN"
-```
-
-## Automatic Fee Collection
-
-The system supports automatic operator fee collection with two paths:
-
-**Lightning Network (instant):** After payment confirmation, fees are auto-forwarded to the operator's Lightning Address via LNbits outbound payments. Requires `OPERATOR_LN_ADDRESS` and `LNBITS_ADMIN_KEY`.
-
-**BTC/XMR (accumulated settlement):** Fees accumulate per-invoice. When the total exceeds `FEE_SETTLEMENT_THRESHOLD_SATS` (default: 10,000 sats), a settlement record is created with the operator's address and a grace period (`FEE_SETTLEMENT_GRACE_DAYS`, default: 30 days). Overdue settlements block new invoice creation (HTTP 402).
-
-| Variable | Description |
-|----------|-------------|
-| `OPERATOR_LN_ADDRESS` | Lightning Address for instant forwarding (e.g. `operator@getalby.com`) |
-| `LNBITS_ADMIN_KEY` | LNbits Admin Key for outbound payments |
-| `OPERATOR_BTC_ADDRESS` | BTC address for on-chain fee settlements |
-| `OPERATOR_XMR_ADDRESS` | XMR address for Monero fee settlements |
-| `FEE_SETTLEMENT_THRESHOLD_SATS` | Min accumulated fees before settlement (default: 10000) |
-| `FEE_SETTLEMENT_GRACE_DAYS` | Days before settlement is overdue (default: 30) |
-
-```bash
-# Check fee collection status
-curl http://localhost:5000/api/fee-status
-
-# List settlements (admin)
-curl http://localhost:5000/admin/fee-settlements \
-  -H "Authorization: Bearer $ADMIN_API_TOKEN"
-
-# Mark settlement as paid (admin)
-curl -X POST http://localhost:5000/admin/fee-settlements/<id>/mark-paid \
-  -H "Authorization: Bearer $ADMIN_API_TOKEN"
-```
+---
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).

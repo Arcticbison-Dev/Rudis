@@ -1,6 +1,6 @@
 # Lightning Rail Service (rail-ln) v2.0
 
-**Production-Ready Lightning Network Payment Rail for Altostratus Payments**
+**Production-Ready Lightning Network Payment Rail for Rudis**
 
 ## Overview
 
@@ -348,4 +348,4 @@ Follow canary deployment strategy in `docs/CANARY_DEPLOYMENT_GUIDE.md`:
 
 ## License
 
-© 2025 Arctic Bison LLC. Altostratus™ is a trademark of Arctic Bison LLC.
+MIT — see [LICENSE](../LICENSE).
