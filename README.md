@@ -32,7 +32,7 @@ Rudis is a standalone payment service you run on your own infrastructure. You po
 ## Quick start
 
 ```bash
-git clone https://github.com/Arcticbison-Dev/CryptoInvoiceNotifier
+git clone https://github.com/Arcticbison-Dev/Rudis
 cd CryptoInvoiceNotifier
 
 # Generate secrets and install dependencies
@@ -169,6 +169,22 @@ For production deployments, see [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md) and
 | [Operations Guide](docs/OPERATIONS_GUIDE.md) | Secrets rotation, backups, production ops |
 | [Observability](docs/OBSERVABILITY.md) | Monitoring, alerting, health checks |
 | [Standalone Integration](docs/STANDALONE_INTEGRATION_GUIDE.md) | Integrating Rudis into your own app |
+
+---
+
+## Integrations
+
+Rudis integrates natively with [Altostratus](https://altostratus.io) — multi-cloud infrastructure management built by the same team. If you're already running Altostratus, Rudis crypto billing is available on all plans without additional setup.
+
+---
+
+## Roadmap
+
+- **Rudis Cloud** — a hosted managed version for operators who want it to run without self-hosting. Self-hosted is free forever.
+- Additional payment rail support
+- Multi-merchant dashboard improvements
+
+Rudis is MIT licensed. Self-hosted will always be free.
 
 ---
 
