@@ -77,7 +77,7 @@ export class LNbitsClient {
       timeout: config.httpTimeout,
       headers: {
         "Content-Type": "application/json",
-        "X-Api-Key": config.walletKey,
+        "X-Api-Key": config.walletKey.trim(),
       },
     });
 
