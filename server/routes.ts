@@ -760,41 +760,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Health check endpoint (Step 3: Fast, no RPC calls, secure)
   // Public endpoint with minimal sensitive data exposure
   app.get("/health", async (req, res) => {
-    const timestamp = new Date().toISOString();
-    
-    // Fast, in-memory health checks only - NO network I/O
-    // Read from internal state and monitoring system
-    const globalHealth = monitoring.getGlobalHealth();
-    const orchestrator = getOrchestrator();
-    
-    // Lightweight storage check (bounded query, no full table scan)
-    let storageStatus: "ok" | "error" = "ok";
     try {
-      // Quick check: can we query pending webhooks? (small dataset)
-      await storage.getPendingWebhooks();
-    } catch (error: any) {
-      storageStatus = "error";
+      const timestamp = new Date().toISOString();
+
+      // Fast, in-memory health checks only - NO network I/O
+      const globalHealth = monitoring.getGlobalHealth();
+      const orchestrator = getOrchestrator();
+
+      // Lightweight storage check (bounded query, no full table scan)
+      let storageStatus: "ok" | "error" = "ok";
+      try {
+        await storage.getPendingWebhooks();
+      } catch {
+        storageStatus = "error";
+      }
+
+      const response: any = {
+        status: globalHealth.overall,
+        timestamp,
+        rails: {
+          btc: buildRailHealthResponse("BTC", globalHealth.rails.BTC, orchestrator),
+          xmr: buildRailHealthResponse("XMR", globalHealth.rails.XMR, orchestrator),
+          ln: buildRailHealthResponse("LN", globalHealth.rails.LN, orchestrator),
+        },
+      };
+
+      if (storageStatus === "error" || globalHealth.overall !== "ok") {
+        response.storage = storageStatus;
+      }
+
+      const httpStatus = globalHealth.overall === "error" ? 503 : 200;
+      return res.status(httpStatus).json(response);
+    } catch (err: any) {
+      console.error("[Health] Health check failed:", err?.message || err);
+      return res.status(200).json({
+        status: "degraded",
+        timestamp: new Date().toISOString(),
+        error: "Health check encountered an internal error",
+      });
     }
-    
-    // Build response matching exact specification format
-    const response: any = {
-      status: globalHealth.overall,
-      timestamp,
-      rails: {
-        btc: buildRailHealthResponse("BTC", globalHealth.rails.BTC, orchestrator),
-        xmr: buildRailHealthResponse("XMR", globalHealth.rails.XMR, orchestrator),
-        ln: buildRailHealthResponse("LN", globalHealth.rails.LN, orchestrator),
-      },
-    };
-    
-    // Include storage status if there are issues (degraded/error only)
-    if (storageStatus === "error" || globalHealth.overall !== "ok") {
-      response.storage = storageStatus;
-    }
-    
-    // HTTP status code based on overall health
-    const httpStatus = globalHealth.overall === "error" ? 503 : 200;
-    res.status(httpStatus).json(response);
   });
   
   /**

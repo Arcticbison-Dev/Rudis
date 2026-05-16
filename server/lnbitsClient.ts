@@ -73,7 +73,7 @@ export class LNbitsClient {
 
     // Create axios instance with base configuration
     this.client = axios.create({
-      baseURL: config.apiUrl,
+      baseURL: config.apiUrl.trim().replace(/\/+$/, ''), // trim whitespace and trailing slashes
       timeout: config.httpTimeout,
       headers: {
         "Content-Type": "application/json",
@@ -81,11 +81,14 @@ export class LNbitsClient {
       },
     });
 
+    // Always log the base URL on construction (helps diagnose config issues)
+    console.log(`[LNbits] client initialized with baseURL: ${config.apiUrl.trim().replace(/\/+$/, '')}`);
+
     // Add request interceptor for debug logging
     // Security: NEVER logs request bodies (may contain secrets/invoices)
     if (config.debugLogging) {
       this.client.interceptors.request.use((request) => {
-        console.log(`[LNbits] → ${request.method?.toUpperCase()} ${request.url}`);
+        console.log(`[LNbits] → ${request.method?.toUpperCase()} ${request.baseURL}${request.url}`);
         return request;
       });
     }
