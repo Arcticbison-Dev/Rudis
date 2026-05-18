@@ -79,6 +79,10 @@ process.on("SIGINT", () => {
 
 const app = express();
 
+// Trust Railway's proxy (required for express-rate-limit behind Railway/any reverse proxy)
+// Without this, X-Forwarded-For headers cause ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+app.set('trust proxy', 1);
+
 // ── Security headers (no Helmet dependency — applied manually) ────────────────
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
