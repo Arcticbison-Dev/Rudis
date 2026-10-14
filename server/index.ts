@@ -9,8 +9,11 @@ import { createLNPoller } from "./ln-poller";
 let railBtcProcess: ChildProcess | null = null;
 let railXmrProcess: ChildProcess | null = null;
 
+// Use full path to tsx binary — it is not in PATH in Railway containers
+const TSX_BIN = path.resolve(process.cwd(), "node_modules/.bin/tsx");
+
 function spawnRailProcess(name: string, scriptPath: string, cwd: string, env: Record<string, string>): ChildProcess {
-  const proc = spawn("tsx", [scriptPath], {
+  const proc = spawn(TSX_BIN, [scriptPath], {
     cwd,
     env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
