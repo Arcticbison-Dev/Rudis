@@ -10,7 +10,7 @@ let railBtcProcess: ChildProcess | null = null;
 let railXmrProcess: ChildProcess | null = null;
 
 function spawnRailProcess(name: string, scriptPath: string, cwd: string, env: Record<string, string>): ChildProcess {
-  const proc = spawn("npx", ["tsx", scriptPath], {
+  const proc = spawn("tsx", [scriptPath], {
     cwd,
     env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
