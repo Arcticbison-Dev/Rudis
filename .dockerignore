@@ -16,7 +16,4 @@ test-*.sh
 vitest.config.ts
 .dockerignore
 docker-compose.yml
-rail-btc
-rail-xmr
-rail-ln
 xmr_rail.db
