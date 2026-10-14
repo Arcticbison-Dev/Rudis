@@ -9,14 +9,20 @@ import { createLNPoller } from "./ln-poller";
 let railBtcProcess: ChildProcess | null = null;
 let railXmrProcess: ChildProcess | null = null;
 
-// Use full path to tsx binary — it is not in PATH in Railway containers
-const TSX_BIN = path.resolve(process.cwd(), "node_modules/.bin/tsx");
+// Resolve tsx binary path from this file's location (__dirname = /app/server in Railway)
+// This is more reliable than process.cwd() which can vary by runtime environment
+const TSX_BIN = path.resolve(__dirname, "../node_modules/.bin/tsx");
 
 function spawnRailProcess(name: string, scriptPath: string, cwd: string, env: Record<string, string>): ChildProcess {
   const proc = spawn(TSX_BIN, [scriptPath], {
     cwd,
     env: { ...process.env, ...env },
     stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  // Must handle 'error' event or Node.js will throw and crash the parent process
+  proc.on("error", (err) => {
+    log(`[${name}:error] Failed to spawn: ${err.message} (tsx path: ${TSX_BIN})`);
   });
 
   proc.stdout?.on("data", (data) => {
@@ -34,8 +40,8 @@ function spawnRailProcess(name: string, scriptPath: string, cwd: string, env: Re
 
 function startRailServices() {
   if (process.env.ENABLE_BTC === "true") {
-    const railBtcPath = path.resolve(process.cwd(), "rail-btc/src/index.ts");
-    railBtcProcess = spawnRailProcess("rail-btc", railBtcPath, path.resolve(process.cwd(), "rail-btc"), {
+    const railBtcPath = path.resolve(__dirname, "../rail-btc/src/index.ts");
+    railBtcProcess = spawnRailProcess("rail-btc", railBtcPath, path.resolve(__dirname, "../rail-btc"), {
       PORT: "5002",
       BTC_NETWORK: process.env.BTC_NETWORK || "testnet",
       PAYMENTS_SERVICE_URL: "http://localhost:5000",
@@ -50,8 +56,8 @@ function startRailServices() {
   }
 
   if (process.env.ENABLE_XMR === "true") {
-    const railXmrPath = path.resolve(process.cwd(), "rail-xmr/src/index.ts");
-    railXmrProcess = spawnRailProcess("rail-xmr", railXmrPath, path.resolve(process.cwd(), "rail-xmr"), {
+    const railXmrPath = path.resolve(__dirname, "../rail-xmr/src/index.ts");
+    railXmrProcess = spawnRailProcess("rail-xmr", railXmrPath, path.resolve(__dirname, "../rail-xmr"), {
       PORT: "5003",
       PAYMENTS_SERVICE_URL: "http://localhost:5000",
       XMR_DEV_MODE: process.env.XMR_DEV_MODE || "false",
