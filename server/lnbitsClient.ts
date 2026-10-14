@@ -45,7 +45,7 @@ export interface LNbitsPayment {
  * LNbits client configuration
  */
 export interface LNbitsClientConfig {
-  apiUrl: string; // Base URL (e.g., https://legend.lnbits.com)
+  apiUrl: string; // Base URL (e.g., https://lnbits.arcticbison.com)
   walletKey: string; // Invoice/Read API key
   adminKey?: string; // Admin API key (required for outbound payments)
   httpTimeout: number; // Request timeout in ms
@@ -71,6 +71,20 @@ export class LNbitsClient {
   constructor(config: LNbitsClientConfig) {
     this.config = config;
 
+    // Cloudflare Access M2M service token headers.
+    // When CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are set (production),
+    // every outbound request to lnbits.arcticbison.com includes these headers so
+    // Cloudflare Access allows the request through without a human login flow.
+    // When the vars are absent (local dev / self-hosted), no headers are added.
+    const cfHeaders: Record<string, string> = {};
+    const cfClientId = process.env.CF_ACCESS_CLIENT_ID;
+    const cfClientSecret = process.env.CF_ACCESS_CLIENT_SECRET;
+    if (cfClientId && cfClientSecret) {
+      cfHeaders["CF-Access-Client-Id"] = cfClientId;
+      cfHeaders["CF-Access-Client-Secret"] = cfClientSecret;
+      console.log("[LNbits] Cloudflare Access M2M auth enabled");
+    }
+
     // Create axios instance with base configuration
     this.client = axios.create({
       baseURL: config.apiUrl.trim().replace(/\/+$/, ''), // trim whitespace and trailing slashes
@@ -78,6 +92,7 @@ export class LNbitsClient {
       headers: {
         "Content-Type": "application/json",
         "X-Api-Key": config.walletKey.trim(),
+        ...cfHeaders,
       },
     });
 
@@ -114,6 +129,7 @@ export class LNbitsClient {
         headers: {
           "Content-Type": "application/json",
           "X-Api-Key": config.adminKey,
+          ...cfHeaders,
         },
       });
     }
