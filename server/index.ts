@@ -55,7 +55,7 @@ function startRailServices() {
     const appRoot = path.resolve(__dirname, "..");
     railBtcProcess = spawnRailProcess("rail-btc", railBtcPath, appRoot, {
       PORT: "5002",
-      BTC_NETWORK: process.env.BTC_NETWORK || "testnet",
+      BTC_NETWORK: process.env.BTC_NETWORK || "mainnet",
       PAYMENTS_SERVICE_URL: "http://localhost:5000",
     });
     railBtcProcess.on("exit", (code) => {
@@ -102,7 +102,7 @@ process.on("SIGINT", () => {
 const app = express();
 
 // Trust Railway's proxy (required for express-rate-limit behind Railway/any reverse proxy)
-// Without this, X-Forwarded-For headers cause ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+// Without this, X-Forwarded-For headers cause ERR_ERL_UNEXPECTED_X-FORWARDED-FOR
 app.set('trust proxy', 1);
 
 // ── Security headers (no Helmet dependency — applied manually) ────────────────
