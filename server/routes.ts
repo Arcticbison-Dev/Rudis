@@ -1,7 +1,7 @@
 import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertInvoiceSchema, insertTempInvoiceSchema } from "@shared/schema";
+import { insertInvoiceSchema } from "@shared/schema";
 import crypto from "crypto";
 import axios, { AxiosError } from "axios";
 import * as monitoring from "./monitoring";
@@ -42,29 +42,29 @@ function mapInvoiceResponse(invoice: any): any {
     description: invoice.description,
     createdAt:   invoice.createdAt,
     expiresAt:   invoice.expiresAt,
-    paymentRail: invoice.paymentRail,
+    paymentRail: invoice.railType,
     metadata:    invoice.metadata,
   };
 
-  if (invoice.paymentRail === "lightning") {
-    response.paymentRequest = invoice.paymentRequest;
-    response.paymentHash    = invoice.paymentHash;
+  if (invoice.railType === "lightning" || invoice.currency === "Lightning") {
+    response.paymentRequest = invoice.bolt11Invoice;
+    response.paymentHash    = invoice.lnPaymentHash;
   }
 
-  if (invoice.paymentRail === "bitcoin") {
-    response.bitcoinAddress = invoice.bitcoinAddress;
-    response.bitcoinAmount  = invoice.bitcoinAmount;
+  if (invoice.railType === "bitcoin" || invoice.currency === "BTC") {
+    response.bitcoinAddress = invoice.derivedAddress || invoice.paymentAddress;
+    response.bitcoinAmount  = invoice.amount;
   }
 
-  if (invoice.paymentRail === "monero") {
-    response.moneroAddress        = invoice.moneroAddress;
-    response.moneroAmount         = invoice.moneroAmount;
-    response.moneroPaymentId      = invoice.moneroPaymentId;
-    response.moneroIntegratedAddr = invoice.moneroIntegratedAddr;
+  if (invoice.railType === "monero" || invoice.currency === "XMR") {
+    response.moneroAddress   = invoice.subaddress || invoice.paymentAddress;
+    response.moneroAmount    = invoice.amount;
   }
 
   if (invoice.paidAt) {
-    response.paidAt = invoice.paidAt.toISOString();
+    response.paidAt = invoice.paidAt instanceof Date
+      ? invoice.paidAt.toISOString()
+      : new Date(invoice.paidAt).toISOString();
   }
 
   return response;
@@ -157,7 +157,6 @@ async function attemptWebhookDelivery(
         monitoring.logWebhookResult(invoiceId, false, response.status);
       }
 
-      // Silent - webhook status tracked in database
       return false;
     }
   } catch (error: any) {
@@ -218,7 +217,7 @@ async function processPendingWebhooks(): Promise<void> {
         webhookLog.invoiceId,
         webhookLog.url,
         payload,
-        webhookLog.attempt
+        parseInt(webhookLog.attempt || "1", 10)
       );
     }
   } catch (error) {
@@ -285,9 +284,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ error: "Unauthorized" });
       }
 
-      const status = req.query.status as string | undefined;
-      const invoices = await storage.listInvoices(status);
-      return res.json(invoices.map(mapInvoiceResponse));
+      const statusFilter = req.query.status as string | undefined;
+      const allInvoices = await storage.getAllInvoices();
+      const filtered = statusFilter
+        ? allInvoices.filter((inv: any) => inv.status === statusFilter)
+        : allInvoices;
+      return res.json(filtered.map(mapInvoiceResponse));
     } catch (error) {
       console.error("Error listing invoices:", error);
       return res.status(500).json({ error: "Internal server error" });
@@ -318,8 +320,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ error: "Missing payment_hash" });
       }
 
-      // Look up the invoice by payment hash
-      const invoice = await storage.getInvoiceByPaymentHash(payment_hash);
+      // Look up the invoice by payment hash (lnPaymentHash field)
+      const allInvoices = await storage.getAllInvoices();
+      const invoice = allInvoices.find((inv: any) => inv.lnPaymentHash === payment_hash);
       if (!invoice) {
         console.log(`LNbits webhook: no invoice found for payment_hash ${payment_hash}`);
         return res.json({ received: true });
@@ -332,10 +335,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Mark invoice as paid
-      const paidInvoice = await storage.markInvoicePaid(invoice.id, {
-        paymentPreimage: payment_preimage,
-        paidAt: new Date(),
-      });
+      const paidInvoice = await storage.updateInvoiceStatus(invoice.id, "paid", new Date());
 
       console.log(`✓ Lightning payment confirmed for invoice ${invoice.id}`);
 
@@ -348,13 +348,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           paymentRail: "lightning",
           amount: invoice.amount,
           currency: invoice.currency,
-          metadata: invoice.metadata,
-          paidAt: paidInvoice.paidAt?.toISOString(),
+          metadata: (invoice as any).metadata,
+          paidAt: paidInvoice?.paidAt instanceof Date
+            ? paidInvoice.paidAt.toISOString()
+            : new Date().toISOString(),
         };
         await queueWebhook(invoice.id, webhookUrl, webhookPayload);
         // Immediate first attempt
         const pendingWebhooks = await storage.getPendingWebhooks();
-        const thisWebhook = pendingWebhooks.find(w => w.invoiceId === invoice.id);
+        const thisWebhook = pendingWebhooks.find((w: any) => w.invoiceId === invoice.id);
         if (thisWebhook) {
           await attemptWebhookDelivery(thisWebhook.id, invoice.id, webhookUrl, webhookPayload, 1);
         }
@@ -389,10 +391,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ received: true, message: "Already paid" });
       }
 
-      const paidInvoice = await storage.markInvoicePaid(invoiceId, {
-        bitcoinTxid: txid,
-        paidAt: new Date(),
-      });
+      const paidInvoice = await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
 
       console.log(`✓ Bitcoin payment confirmed for invoice ${invoiceId} (txid: ${txid}, confirmations: ${confirmations})`);
 
@@ -404,14 +403,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           paymentRail: "bitcoin",
           amount: invoice.amount,
           currency: invoice.currency,
-          metadata: invoice.metadata,
-          paidAt: paidInvoice.paidAt?.toISOString(),
+          metadata: (invoice as any).metadata,
+          paidAt: paidInvoice?.paidAt instanceof Date
+            ? paidInvoice.paidAt.toISOString()
+            : new Date().toISOString(),
           txid,
           confirmations,
         };
         await queueWebhook(invoiceId, webhookUrl, webhookPayload);
         const pendingWebhooks = await storage.getPendingWebhooks();
-        const thisWebhook = pendingWebhooks.find(w => w.invoiceId === invoiceId);
+        const thisWebhook = pendingWebhooks.find((w: any) => w.invoiceId === invoiceId);
         if (thisWebhook) {
           await attemptWebhookDelivery(thisWebhook.id, invoiceId, webhookUrl, webhookPayload, 1);
         }
@@ -446,10 +447,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json({ received: true, message: "Already paid" });
       }
 
-      const paidInvoice = await storage.markInvoicePaid(invoiceId, {
-        moneroTxid: txid,
-        paidAt: new Date(),
-      });
+      const paidInvoice = await storage.updateInvoiceStatus(invoiceId, "paid", new Date());
 
       console.log(`✓ Monero payment confirmed for invoice ${invoiceId} (txid: ${txid}, confirmations: ${confirmations})`);
 
@@ -461,14 +459,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
           paymentRail: "monero",
           amount: invoice.amount,
           currency: invoice.currency,
-          metadata: invoice.metadata,
-          paidAt: paidInvoice.paidAt?.toISOString(),
+          metadata: (invoice as any).metadata,
+          paidAt: paidInvoice?.paidAt instanceof Date
+            ? paidInvoice.paidAt.toISOString()
+            : new Date().toISOString(),
           txid,
           confirmations,
         };
         await queueWebhook(invoiceId, webhookUrl, webhookPayload);
         const pendingWebhooks = await storage.getPendingWebhooks();
-        const thisWebhook = pendingWebhooks.find(w => w.invoiceId === invoiceId);
+        const thisWebhook = pendingWebhooks.find((w: any) => w.invoiceId === invoiceId);
         if (thisWebhook) {
           await attemptWebhookDelivery(thisWebhook.id, invoiceId, webhookUrl, webhookPayload, 1);
         }
@@ -498,46 +498,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       return res.json({ processed: true });
     } catch (error) {
       console.error("Error in process-webhooks cron:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // Temp invoice endpoints (for UI payment flow)
-  // ─────────────────────────────────────────────────────────────────────────
-  app.post("/api/temp-invoices", async (req: Request, res: Response) => {
-    try {
-      const parsed = insertTempInvoiceSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({ error: "Invalid request body", details: parsed.error.format() });
-      }
-
-      const tempInvoice = await storage.createTempInvoice(parsed.data);
-      return res.status(201).json(tempInvoice);
-    } catch (error) {
-      console.error("Error creating temp invoice:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  app.get("/api/temp-invoices/:id", async (req: Request, res: Response) => {
-    try {
-      const tempInvoice = await storage.getTempInvoice(req.params.id);
-      if (!tempInvoice) return res.status(404).json({ error: "Temp invoice not found" });
-      return res.json(tempInvoice);
-    } catch (error) {
-      console.error("Error fetching temp invoice:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
-  app.patch("/api/temp-invoices/:id", async (req: Request, res: Response) => {
-    try {
-      const tempInvoice = await storage.updateTempInvoice(req.params.id, req.body);
-      if (!tempInvoice) return res.status(404).json({ error: "Temp invoice not found" });
-      return res.json(tempInvoice);
-    } catch (error) {
-      console.error("Error updating temp invoice:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   });
