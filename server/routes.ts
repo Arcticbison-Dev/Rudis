@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { insertInvoiceSchema, insertTempInvoiceSchema } from "@shared/schema";
 import crypto from "crypto";
 import axios, { AxiosError } from "axios";
-import monitoring from "./monitoring";
+import * as monitoring from "./monitoring";
 import { initializeLNbitsWebhook } from "./lnbits-webhook";
 
 // ─────────────────────────────────────────────────────────────────────────────
