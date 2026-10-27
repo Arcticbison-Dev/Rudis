@@ -159,7 +159,12 @@ export class LNbitsClient {
         webhook: webhookUrl || undefined,
       });
 
-      return response.data;
+      // Normalize: newer LNbits versions return `bolt11` instead of `payment_request`
+      const d = response.data as any;
+      return {
+        ...d,
+        payment_request: d.payment_request || d.bolt11 || "",
+      } as LNbitsInvoice;
     } catch (error) {
       this.handleError(error, "createInvoice", { amountSats, memo });
       throw error; // TypeScript needs this even though handleError throws
