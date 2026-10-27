@@ -6,6 +6,7 @@ import crypto from "crypto";
 import axios, { AxiosError } from "axios";
 import * as monitoring from "./monitoring";
 import { initializeLNbitsWebhook } from "./lnbits-webhook";
+import { createLNbitsClient } from "./lnbitsClient";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Webhook delivery constants
@@ -252,7 +253,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const invoice = await storage.createInvoice(parsed.data);
-      return res.status(201).json(mapInvoiceResponse(invoice));
+
+      // For Lightning invoices, call LNbits immediately to generate the BOLT11
+      let finalInvoice = invoice;
+      if (invoice.currency === "Lightning") {
+        try {
+          const lnbitsApiUrl = process.env.LNBITS_API_URL;
+          const lnbitsWalletKey = process.env.LNBITS_WALLET_KEY;
+          if (lnbitsApiUrl && lnbitsWalletKey) {
+            const lnbitsClient = createLNbitsClient({
+              apiUrl: lnbitsApiUrl,
+              walletKey: lnbitsWalletKey,
+              httpTimeout: parseInt(process.env.LN_HTTP_TIMEOUT || "10000", 10),
+            });
+
+            // Convert BTC decimal amount to sats
+            const amountSats = Math.ceil(parseFloat(invoice.amount) * 100_000_000);
+            const memo = invoice.description || `Invoice ${invoice.id}`;
+
+            // Webhook URL: base + secret token in path (same pattern as ln-adapter)
+            let webhookUrl: string | undefined;
+            const lnWebhookBase = process.env.LNBITS_WEBHOOK_URL;
+            const lnWebhookSecret = process.env.LNBITS_WEBHOOK_SECRET;
+            if (lnWebhookBase && lnWebhookSecret) {
+              webhookUrl = `${lnWebhookBase}/${lnWebhookSecret}`;
+            }
+
+            const lnbitsInvoice = await lnbitsClient.createInvoice(amountSats, memo, webhookUrl);
+            console.log(`[LN] Created LNbits invoice for ${invoice.id}: hash=${lnbitsInvoice.payment_hash}`);
+
+            // Update invoice record with BOLT11 and payment tracking fields
+            const updated = await storage.updateInvoice(invoice.id, {
+              bolt11Invoice: lnbitsInvoice.payment_request || null,
+              lnPaymentHash: lnbitsInvoice.payment_hash || null,
+              lnCheckingId: lnbitsInvoice.checking_id || null,
+              paymentAddress: lnbitsInvoice.payment_request || invoice.paymentAddress,
+              railType: "ln",
+            });
+            if (updated) finalInvoice = updated;
+          } else {
+            console.warn("[LN] LNBITS_API_URL or LNBITS_WALLET_KEY not set — skipping LNbits call");
+          }
+        } catch (lnError) {
+          const msg = lnError instanceof Error ? lnError.message : String(lnError);
+          console.error(`[LN] Failed to create LNbits invoice for ${invoice.id}:`, msg);
+          // Non-fatal: return invoice without bolt11 so Altostratus can handle gracefully
+        }
+      }
+
+      return res.status(201).json(mapInvoiceResponse(finalInvoice));
     } catch (error) {
       console.error("Error creating invoice:", error);
       return res.status(500).json({ error: "Internal server error" });
