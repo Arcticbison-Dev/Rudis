@@ -235,6 +235,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
+  // GET /health — rails discovery endpoint (called by Altostratus /api/crypto/status)
+  app.get("/health", (_req, res) => {
+    const enableLn = process.env.ENABLE_LN === "true";
+    const enableBtc = process.env.ENABLE_BTC === "true";
+    const enableXmr = process.env.ENABLE_XMR === "true";
+    res.json({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      rails: {
+        ln:  { status: enableLn  ? "enabled" : "disabled" },
+        btc: { status: enableBtc ? "enabled" : "disabled" },
+        xmr: { status: enableXmr ? "enabled" : "disabled" },
+      },
+    });
+  });
+
   // ─────────────────────────────────────────────────────────────────────────
   // Invoice CRUD
   // ─────────────────────────────────────────────────────────────────────────
